@@ -15,8 +15,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target browser --format esm --minify",
-    "dev": "bun --watch src/index.ts",
+    "build": "bun build src/index.tsx --outdir dist --target browser --format esm --minify",
+    "dev": "bun --watch src/index.tsx",
     "prepublishOnly": "bun run build"
   },
   "keywords": [

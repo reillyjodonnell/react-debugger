@@ -29,8 +29,18 @@ function App() {
       <p className="read-the-docs">
         Click on the Vite and React logos to learn more
       </p>
+      <Child1 />
+      <Child2 />
     </>
   );
 }
 
 export default App;
+
+function Child1() {
+  return <div>Child1</div>;
+}
+
+function Child2() {
+  return <div>Child2</div>;
+}

@@ -36,17 +36,39 @@ async function connectToCDP() {
       } catch {
         return;
       }
+
       // Forward relevant messages to overlay clients
       if (msg.method === 'Runtime.consoleAPICalled') {
-        const { type, args } = msg.params;
-        const log = args
-          .map((a: any) => a.value || a.description || '')
-          .join(' ');
-        broadcast({ type, log, raw: msg });
+        const { type, args, executionContextId } = msg.params;
+
+        console.log('Console API called:', {
+          type,
+          args,
+          url: msg.params?.url,
+        });
+
+        // Only capture logs from our app (localhost:5173 for Vite dev server)
+        if (shouldCaptureFromContext(executionContextId, msg)) {
+          const log = args
+            .map((a: any) => a.value || a.description || '')
+            .join(' ');
+
+          broadcast({ type, log, raw: msg });
+        }
       }
       if (msg.method === 'Console.messageAdded') {
         const { message } = msg.params;
-        broadcast({ type: message.level, log: message.text, raw: msg });
+
+        console.log('Console message added:', {
+          level: message.level,
+          text: message.text,
+          url: message.url,
+        });
+
+        // Only capture messages from our app
+        if (shouldCaptureMessage(message)) {
+          broadcast({ type: message.level, log: message.text, raw: msg });
+        }
       }
     });
     cdpSocket.addEventListener('close', () => {
@@ -67,6 +89,52 @@ function broadcast(data: any) {
   for (const ws of wsClients) {
     if (ws.readyState === 1) ws.send(msg);
   }
+}
+
+// Simple filtering to only capture logs from our app
+function shouldCaptureFromContext(
+  executionContextId: number,
+  msg: any
+): boolean {
+  // Check if the message URL contains our app's domain
+  const url = msg.params?.url || '';
+
+  // Only capture if it's from our app but NOT from the debugger itself
+  const isFromApp =
+    url.includes('localhost:5173') || url.includes('127.0.0.1:5173');
+  const isFromDebugger =
+    url.includes('dist/index.js') ||
+    url.includes('react-debugger') ||
+    url.includes('@fs/');
+
+  const shouldCapture = isFromApp && !isFromDebugger;
+  if (shouldCapture) {
+    console.log('Capturing console log from:', url);
+  } else {
+    console.log('Filtering out console log from:', url);
+  }
+  return shouldCapture;
+}
+
+function shouldCaptureMessage(message: any): boolean {
+  // Check if the message URL contains our app's domain
+  const url = message.url || '';
+
+  // Only capture if it's from our app but NOT from the debugger itself
+  const isFromApp =
+    url.includes('localhost:5173') || url.includes('127.0.0.1:5173');
+  const isFromDebugger =
+    url.includes('dist/index.js') ||
+    url.includes('react-debugger') ||
+    url.includes('@fs/');
+
+  const shouldCapture = isFromApp && !isFromDebugger;
+  if (shouldCapture) {
+    console.log('Capturing message from:', url);
+  } else {
+    console.log('Filtering out message from:', url);
+  }
+  return shouldCapture;
 }
 
 // --- WebSocket Server for Overlay Clients ---
