@@ -1,0 +1,38 @@
+{
+  "name": "react-debugger",
+  "version": "0.1.0",
+  "description": "A Chrome DevTools Protocol-based debugger for React applications",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target browser --format esm --minify",
+    "dev": "bun --watch src/index.ts",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "react",
+    "debugger",
+    "chrome",
+    "devtools",
+    "cdp",
+    "overlay"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
