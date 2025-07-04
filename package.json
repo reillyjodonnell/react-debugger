@@ -15,7 +15,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun build src/index.tsx --outdir dist --target browser --format esm --minify",
+    "build": "bun build src/index.tsx --outdir dist --target browser --format esm",
     "dev": "bun --watch src/index.tsx",
     "prepublishOnly": "bun run build"
   },
@@ -34,5 +34,8 @@
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "sourcemap-codec": "^1.4.8"
   }
 }

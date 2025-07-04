@@ -65,6 +65,7 @@ export const ViewTransitionNamedStatic = /*    */ SnapshotStatic;
 export const ViewTransitionStatic = /*         */ 0b0000010000000000000000000000000;
 const OFFSET = 2; // px
 function highlightRenderForElement(element: HTMLElement) {
+  return;
   const rect = element.getBoundingClientRect();
   if (!rect) {
     console.log('Element has no bounding rect');
@@ -77,11 +78,11 @@ function highlightRenderForElement(element: HTMLElement) {
   highlight.style.width = `${rect.width}px`;
   highlight.style.height = `${rect.height}px`;
   highlight.style.zIndex = '999999999';
-  highlight.style.outline = '2px dashed pink';
+  highlight.style.outline = '2px solid rgb(78, 205, 196)';
   highlight.style.outlineOffset = `${OFFSET}px`;
   highlight.style.pointerEvents = 'none';
   highlight.style.transition = 'outline-offset 0.3s ease-in-out';
-  highlight.style.backgroundColor = 'rgba(255, 192, 203, 0.08)';
+  highlight.style.backgroundColor = 'rgba(78, 205, 196, 0.1)';
   highlight.style.borderRadius = '4px';
   document.documentElement.appendChild(highlight);
   setTimeout(() => {
@@ -127,6 +128,12 @@ function traverseFiber(fiber: FiberNode | null, isRoot = false) {
   }
 }
 
+// Component source location cache
+const ComponentSourceMap = new Map<
+  Function,
+  { file: string; line: number } | null
+>();
+
 // Override with your own implementation
 if (!window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
   window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
@@ -149,6 +156,88 @@ if (!window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
   traverseFiber(root.current, true);
   console.log('ComponentMap entries: ', [...ComponentMap.entries()]);
 };
+
+// Function to capture component source location during execution
+function captureComponentSource(
+  componentType: Function
+): { file: string; line: number } | null {
+  // Check cache first
+  if (ComponentSourceMap.has(componentType)) {
+    return ComponentSourceMap.get(componentType) || null;
+  }
+
+  try {
+    // Create a wrapper that captures the stack trace when the component executes
+    const originalComponent = componentType;
+    const wrappedComponent = function (...args: any[]) {
+      // Capture stack trace during component execution
+      const error = new Error();
+      const stack = error.stack || '';
+
+      // Parse the stack trace to find the component's source location
+      const sourceLocation = parseComponentStack(
+        stack,
+        originalComponent.name || ''
+      );
+
+      // Cache the result
+      ComponentSourceMap.set(originalComponent, sourceLocation);
+
+      // Call the original component
+      return originalComponent.apply(null, args);
+    };
+
+    // Copy the original component's properties
+    Object.setPrototypeOf(
+      wrappedComponent,
+      Object.getPrototypeOf(originalComponent)
+    );
+    Object.defineProperty(wrappedComponent, 'name', {
+      value: originalComponent.name,
+    });
+
+    // Replace the component in the fiber
+    return null; // Will be populated on first execution
+  } catch (e) {
+    console.error('Error capturing component source:', e);
+    ComponentSourceMap.set(componentType, null);
+    return null;
+  }
+}
+
+function parseComponentStack(
+  stack: string,
+  componentName: string
+): { file: string; line: number } | null {
+  const lines = stack.split('\n');
+
+  for (const line of lines) {
+    // Look for the component function in the stack
+    // Pattern: "at ComponentName (file:line:column)"
+    const match = line.match(/at\s+(\w+)\s+\((.+?):(\d+):(\d+)\)/);
+
+    if (match) {
+      const [, funcName, file, lineNum, column] = match;
+
+      // Check if this is our component
+      if (funcName === componentName && file) {
+        return {
+          file: file || '',
+          line: parseInt(lineNum || '0'),
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+// Export the function to get component source location
+export function getComponentSourceLocation(
+  componentType: Function
+): { file: string; line: number } | null {
+  return ComponentSourceMap.get(componentType) || null;
+}
 
 // Canvas overlay handles highlighting now - removed old DOM-based highlighting
 
