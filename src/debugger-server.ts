@@ -6,7 +6,6 @@ await Bun.build({
   outdir: './dist',
   format: 'esm',
   target: 'browser',
-  // Don't externalize React - bundle it in
   external: [],
 });
 
@@ -69,13 +68,27 @@ const server = serve({
             margin: 0;
             padding: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1e1e1e;
+            background: #0f0f0f;
             color: #ffffff;
             overflow: hidden;
         }
         #root {
             width: 100vw;
             height: 100vh;
+        }
+        /* Prevent text selection for better UX */
+        * {
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+        /* Allow text selection in code areas */
+        pre, code, .code {
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            user-select: text;
         }
     </style>
 </head>

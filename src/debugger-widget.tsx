@@ -1,5 +1,14 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  Play,
+  StepForward,
+  ArrowDown,
+  ArrowUp,
+  Pause,
+  RotateCcw,
+  Target,
+} from 'lucide-react';
 
 export interface DebuggerState {
   isOpen: boolean;
@@ -9,6 +18,7 @@ export interface DebuggerState {
     logs: boolean;
     breakpoints: boolean;
     components: boolean;
+    callStack: boolean;
   };
   logs: Array<{
     type: 'info' | 'warn' | 'error';
@@ -30,6 +40,13 @@ export interface DebuggerState {
     timestamp: number;
   };
   selectedBreakpoint?: string;
+  callStack?: Array<{
+    functionName: string;
+    scriptId: string;
+    lineNumber: number;
+    columnNumber: number;
+    url?: string;
+  }>;
   capturedData?: {
     props: Record<string, any>;
     state: Record<string, any>;
@@ -38,10 +55,12 @@ export interface DebuggerState {
       type: string;
       value: any;
       index: number;
+      hookType?: string;
     }>;
     renderCount: number;
     lastRenderTime: number;
   };
+  allBreakpointComponentData?: Record<string, any>;
 }
 
 interface ComponentInfo {
@@ -65,7 +84,31 @@ const DebuggerOverlayComponent: React.FC<{
   cdpSocket: WebSocket | null;
   isConnected: boolean;
   sendCDPCommand: (method: string, params?: any) => Promise<any>;
-}> = ({ state, onStateChange, cdpSocket, isConnected, sendCDPCommand }) => {
+  resumeExecution: () => Promise<void>;
+  stepOver: () => Promise<void>;
+  stepInto: () => Promise<void>;
+  stepOut: () => Promise<void>;
+  pauseExecution: () => Promise<void>;
+  restartFrame: () => Promise<void>;
+  continueToLocation: () => Promise<void>;
+  requestComponentData: (breakpointId: string) => void;
+  getAllBreakpointComponentData: () => void;
+}> = ({
+  state,
+  onStateChange,
+  cdpSocket,
+  isConnected,
+  sendCDPCommand,
+  resumeExecution,
+  stepOver,
+  stepInto,
+  stepOut,
+  pauseExecution,
+  restartFrame,
+  continueToLocation,
+  requestComponentData,
+  getAllBreakpointComponentData,
+}) => {
   const toggleSection = (section: keyof typeof state.sections) => {
     onStateChange({
       ...state,
@@ -95,14 +138,16 @@ const DebuggerOverlayComponent: React.FC<{
       ],
     });
 
-    // Send message to parent to update highlighting
-    window.parent.postMessage(
-      {
-        type: 'toggleHighlighting',
-        payload: { enabled: newMode },
-      },
-      '*'
-    );
+    // Send message to parent window to update highlighting
+    if (window.opener) {
+      window.opener.postMessage(
+        {
+          type: 'toggleHighlighting',
+          payload: { enabled: newMode },
+        },
+        '*'
+      );
+    }
   };
 
   const clearLogs = () => {
@@ -112,14 +157,16 @@ const DebuggerOverlayComponent: React.FC<{
   const clearBreakpoints = () => {
     onStateChange({ ...state, breakpoints: [] });
 
-    // Send updated breakpoints to overlay
-    window.parent.postMessage(
-      {
-        type: 'updateBreakpoints',
-        payload: { breakpoints: [] },
-      },
-      '*'
-    );
+    // Send updated breakpoints to parent window
+    if (window.opener) {
+      window.opener.postMessage(
+        {
+          type: 'updateBreakpoints',
+          payload: { breakpoints: [] },
+        },
+        '*'
+      );
+    }
   };
 
   const toggleBreakpoint = (breakpointId: string) => {
@@ -130,17 +177,19 @@ const DebuggerOverlayComponent: React.FC<{
       ),
     });
 
-    // Send updated breakpoints to overlay
+    // Send updated breakpoints to parent window
     const updatedBreakpoints = state.breakpoints.map((bp) =>
       bp.id === breakpointId ? { ...bp, enabled: !bp.enabled } : bp
     );
-    window.parent.postMessage(
-      {
-        type: 'updateBreakpoints',
-        payload: { breakpoints: updatedBreakpoints },
-      },
-      '*'
-    );
+    if (window.opener) {
+      window.opener.postMessage(
+        {
+          type: 'updateBreakpoints',
+          payload: { breakpoints: updatedBreakpoints },
+        },
+        '*'
+      );
+    }
   };
 
   const removeBreakpoint = (breakpointId: string) => {
@@ -155,72 +204,22 @@ const DebuggerOverlayComponent: React.FC<{
   };
 
   const selectBreakpoint = (breakpointId: string) => {
+    const isSelecting = state.selectedBreakpoint !== breakpointId;
+
     onStateChange({
       ...state,
-      selectedBreakpoint:
-        state.selectedBreakpoint === breakpointId ? undefined : breakpointId,
+      selectedBreakpoint: isSelecting ? breakpointId : undefined,
     });
-  };
 
-  const resumeExecution = async () => {
-    try {
-      await sendCDPCommand('Debugger.resume');
-      onStateChange({
-        ...state,
-        isPaused: false,
-        currentBreakpoint: undefined,
-        selectedBreakpoint: undefined,
-        capturedData: undefined,
-        logs: [
-          ...state.logs,
-          {
-            type: 'info',
-            message: 'Execution resumed',
-            timestamp: Date.now(),
-          },
-        ],
-      });
-    } catch (error) {
-      onStateChange({
-        ...state,
-        logs: [
-          ...state.logs,
-          {
-            type: 'error',
-            message: `Failed to resume: ${error}`,
-            timestamp: Date.now(),
-          },
-        ],
-      });
-    }
-  };
-
-  const stepOver = async () => {
-    try {
-      await sendCDPCommand('Debugger.stepOver');
-      onStateChange({
-        ...state,
-        logs: [
-          ...state.logs,
-          {
-            type: 'info',
-            message: 'Step over executed',
-            timestamp: Date.now(),
-          },
-        ],
-      });
-    } catch (error) {
-      onStateChange({
-        ...state,
-        logs: [
-          ...state.logs,
-          {
-            type: 'error',
-            message: `Failed to step over: ${error}`,
-            timestamp: Date.now(),
-          },
-        ],
-      });
+    // If we're selecting a breakpoint, get the component data
+    if (isSelecting) {
+      const selectedBreakpoint = state.breakpoints.find(
+        (bp) => bp.id === breakpointId
+      );
+      if (selectedBreakpoint) {
+        // Request real component data for this breakpoint
+        requestComponentData(selectedBreakpoint.id);
+      }
     }
   };
 
@@ -487,62 +486,6 @@ const DebuggerOverlayComponent: React.FC<{
             Tree {state.sections.components ? '▼' : '▶'}
           </button>
         </div>
-
-        {/* Debug Controls - always visible when paused */}
-        {state.isPaused && (
-          <div
-            style={{
-              display: 'flex',
-              gap: '6px',
-              padding: '12px 16px',
-              background: 'rgba(78, 205, 196, 0.05)',
-              borderBottom: '1px solid rgba(78, 205, 196, 0.2)',
-              alignItems: 'center',
-            }}
-          >
-            <div
-              style={{ flex: 1, fontSize: '11px', color: 'rgb(78, 205, 196)' }}
-            >
-              {state.currentBreakpoint && (
-                <span>
-                  Hit: {state.currentBreakpoint.component}:
-                  {state.currentBreakpoint.line}
-                </span>
-              )}
-            </div>
-            <button
-              onClick={resumeExecution}
-              style={{
-                background: 'rgba(78, 205, 196, 0.15)',
-                border: '1px solid rgba(78, 205, 196, 0.3)',
-                color: 'rgb(78, 205, 196)',
-                fontSize: '10px',
-                padding: '4px 8px',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontWeight: '500',
-              }}
-            >
-              ▶ Resume
-            </button>
-            <button
-              onClick={stepOver}
-              style={{
-                background: 'rgba(108, 117, 125, 0.15)',
-                border: '1px solid rgba(108, 117, 125, 0.3)',
-                color: 'rgba(255, 255, 255, 0.8)',
-                fontSize: '10px',
-                padding: '4px 8px',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-              }}
-            >
-              ⏯ Step
-            </button>
-          </div>
-        )}
 
         {/* Content */}
         <div style={{ flex: '1 1 0%', overflowY: 'auto', padding: '0' }}>
@@ -970,9 +913,339 @@ const DebuggerOverlayComponent: React.FC<{
             style={{ flex: '1 1 0%', overflowY: 'auto', padding: '12px 16px' }}
           >
             <div style={{ fontSize: '11px', lineHeight: '1.4' }}>
+              {/* Debug Controls - when paused */}
+              {state.isPaused && (
+                <div style={{ marginBottom: '20px' }}>
+                  <div
+                    style={{
+                      fontWeight: '600',
+                      color: 'rgb(78, 205, 196)',
+                      marginBottom: '12px',
+                      fontSize: '12px',
+                    }}
+                  >
+                    {state.currentBreakpoint && (
+                      <span>
+                        Hit: {state.currentBreakpoint.component}:
+                        {state.currentBreakpoint.line}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Primary Debug Actions */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '4px',
+                      alignItems: 'center',
+                      marginBottom: '8px',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <button
+                      onClick={resumeExecution}
+                      style={{
+                        background: 'rgba(78, 205, 196, 0.15)',
+                        border: '1px solid rgba(78, 205, 196, 0.3)',
+                        color: 'rgb(78, 205, 196)',
+                        fontSize: '10px',
+                        padding: '6px 10px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        fontWeight: '500',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="Resume execution (F8)"
+                    >
+                      <Play size={12} />
+                      Resume
+                    </button>
+
+                    <button
+                      onClick={stepOver}
+                      style={{
+                        background: 'rgba(108, 117, 125, 0.15)',
+                        border: '1px solid rgba(108, 117, 125, 0.3)',
+                        color: 'rgba(255, 255, 255, 0.8)',
+                        fontSize: '10px',
+                        padding: '6px 10px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="Step over (F10)"
+                    >
+                      <StepForward size={12} />
+                      Step Over
+                    </button>
+
+                    <button
+                      onClick={stepInto}
+                      style={{
+                        background: 'rgba(108, 117, 125, 0.15)',
+                        border: '1px solid rgba(108, 117, 125, 0.3)',
+                        color: 'rgba(255, 255, 255, 0.8)',
+                        fontSize: '10px',
+                        padding: '6px 10px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="Step into (F11)"
+                    >
+                      <ArrowDown size={12} />
+                      Step Into
+                    </button>
+
+                    <button
+                      onClick={stepOut}
+                      style={{
+                        background: 'rgba(108, 117, 125, 0.15)',
+                        border: '1px solid rgba(108, 117, 125, 0.3)',
+                        color: 'rgba(255, 255, 255, 0.8)',
+                        fontSize: '10px',
+                        padding: '6px 10px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="Step out (Shift+F11)"
+                    >
+                      <ArrowUp size={12} />
+                      Step Out
+                    </button>
+                  </div>
+
+                  {/* Secondary Debug Actions */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '4px',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <button
+                      onClick={pauseExecution}
+                      style={{
+                        background: 'rgba(255, 193, 7, 0.15)',
+                        border: '1px solid rgba(255, 193, 7, 0.3)',
+                        color: 'rgb(255, 193, 7)',
+                        fontSize: '10px',
+                        padding: '6px 10px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="Pause execution"
+                    >
+                      <Pause size={12} />
+                      Pause
+                    </button>
+
+                    <button
+                      onClick={restartFrame}
+                      style={{
+                        background: 'rgba(108, 117, 125, 0.15)',
+                        border: '1px solid rgba(108, 117, 125, 0.3)',
+                        color: 'rgba(255, 255, 255, 0.8)',
+                        fontSize: '10px',
+                        padding: '6px 10px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="Restart current frame"
+                    >
+                      <RotateCcw size={12} />
+                      Restart
+                    </button>
+
+                    <button
+                      onClick={continueToLocation}
+                      style={{
+                        background: 'rgba(78, 205, 196, 0.15)',
+                        border: '1px solid rgba(78, 205, 196, 0.3)',
+                        color: 'rgb(78, 205, 196)',
+                        fontSize: '10px',
+                        padding: '6px 10px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontFamily: 'monospace',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="Continue to current location"
+                    >
+                      <Target size={12} />
+                      Continue
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Call Stack - when paused */}
+              {state.isPaused && state.callStack && (
+                <div style={{ marginBottom: '20px' }}>
+                  <div
+                    style={{
+                      fontWeight: '600',
+                      color: 'rgba(255, 255, 255, 0.8)',
+                      marginBottom: '8px',
+                    }}
+                  >
+                    Call Stack ({state.callStack.length})
+                  </div>
+                  <div
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.03)',
+                      padding: '8px',
+                      borderRadius: '4px',
+                      border: '1px solid rgba(255, 255, 255, 0.05)',
+                      maxHeight: '120px',
+                      overflowY: 'auto',
+                    }}
+                  >
+                    {state.callStack.map((frame, index) => (
+                      <div
+                        key={index}
+                        style={{
+                          padding: '4px 0',
+                          color:
+                            index === 0
+                              ? 'rgb(78, 205, 196)'
+                              : 'rgba(255, 255, 255, 0.7)',
+                          fontWeight: index === 0 ? '500' : 'normal',
+                          fontSize: '10px',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: '9px',
+                              color: 'rgba(255, 255, 255, 0.5)',
+                              minWidth: '12px',
+                            }}
+                          >
+                            {index}
+                          </span>
+                          <span>{frame.functionName || 'anonymous'}</span>
+                        </div>
+                        {frame.url && (
+                          <div
+                            style={{
+                              paddingLeft: '18px',
+                              fontSize: '9px',
+                              color: 'rgba(255, 255, 255, 0.5)',
+                            }}
+                          >
+                            {frame.url}:{frame.lineNumber + 1}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Component Data */}
               {state.capturedData ? (
                 <>
-                  {/* Props */}
+                  {/* Hooks - Always show if we have captured data */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <div
+                      style={{
+                        fontWeight: '600',
+                        color: 'rgba(255, 255, 255, 0.8)',
+                        marginBottom: '8px',
+                      }}
+                    >
+                      Hooks:
+                    </div>
+                    <div
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        padding: '8px',
+                        borderRadius: '4px',
+                        border: '1px solid rgba(255, 255, 255, 0.05)',
+                        fontFamily: 'monospace',
+                        fontSize: '11px',
+                        lineHeight: '1.4',
+                      }}
+                    >
+                      {state.capturedData.hooks.length > 0 ? (
+                        state.capturedData.hooks.map((hook, index) => (
+                          <div key={index} style={{ marginBottom: '6px' }}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: '8px',
+                              }}
+                            >
+                              <span
+                                style={{
+                                  color: 'rgba(78, 205, 196, 0.9)',
+                                  fontWeight: '500',
+                                  minWidth: '60px',
+                                  fontSize: '10px',
+                                }}
+                              >
+                                {hook.hookType || hook.type}
+                              </span>
+                              {hook.value !== undefined && (
+                                <span
+                                  style={{
+                                    color: 'rgba(255, 193, 7, 0.9)',
+                                    flex: 1,
+                                    wordBreak: 'break-word',
+                                  }}
+                                >
+                                  {formatValue(hook.value)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div
+                          style={{
+                            color: 'rgba(255, 255, 255, 0.5)',
+                            fontStyle: 'italic',
+                          }}
+                        >
+                          No hooks detected
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Props - Show if we have props data */}
                   {Object.keys(state.capturedData.props).length > 0 && (
                     <div style={{ marginBottom: '16px' }}>
                       <div
@@ -982,7 +1255,7 @@ const DebuggerOverlayComponent: React.FC<{
                           marginBottom: '8px',
                         }}
                       >
-                        Props
+                        Props:
                       </div>
                       <div
                         style={{
@@ -990,28 +1263,25 @@ const DebuggerOverlayComponent: React.FC<{
                           padding: '8px',
                           borderRadius: '4px',
                           border: '1px solid rgba(255, 255, 255, 0.05)',
+                          fontFamily: 'monospace',
+                          fontSize: '11px',
+                          lineHeight: '1.4',
                         }}
                       >
                         {Object.entries(state.capturedData.props).map(
                           ([key, value]) => (
-                            <div key={key} style={{ marginBottom: '6px' }}>
-                              <div
-                                style={{
-                                  color: 'rgba(255, 165, 0, 0.9)',
-                                  fontWeight: '500',
-                                  marginBottom: '2px',
-                                }}
+                            <div key={key} style={{ marginBottom: '4px' }}>
+                              <span style={{ color: 'rgba(255, 165, 0, 0.9)' }}>
+                                {key}
+                              </span>
+                              <span
+                                style={{ color: 'rgba(255, 255, 255, 0.7)' }}
                               >
-                                {key}:
-                              </div>
-                              <div
-                                style={{
-                                  color: 'rgba(255, 255, 255, 0.7)',
-                                  paddingLeft: '8px',
-                                }}
-                              >
+                                :{' '}
+                              </span>
+                              <span style={{ color: 'rgba(255, 193, 7, 0.9)' }}>
                                 {formatValue(value)}
-                              </div>
+                              </span>
                             </div>
                           )
                         )}
@@ -1019,8 +1289,8 @@ const DebuggerOverlayComponent: React.FC<{
                     </div>
                   )}
 
-                  {/* State */}
-                  {Object.keys(state.capturedData.state).length > 0 && (
+                  {/* Context - Show if we have context data */}
+                  {Object.keys(state.capturedData.context).length > 0 && (
                     <div style={{ marginBottom: '16px' }}>
                       <div
                         style={{
@@ -1029,7 +1299,7 @@ const DebuggerOverlayComponent: React.FC<{
                           marginBottom: '8px',
                         }}
                       >
-                        State
+                        Context:
                       </div>
                       <div
                         style={{
@@ -1037,28 +1307,25 @@ const DebuggerOverlayComponent: React.FC<{
                           padding: '8px',
                           borderRadius: '4px',
                           border: '1px solid rgba(255, 255, 255, 0.05)',
+                          fontFamily: 'monospace',
+                          fontSize: '11px',
+                          lineHeight: '1.4',
                         }}
                       >
-                        {Object.entries(state.capturedData.state).map(
+                        {Object.entries(state.capturedData.context).map(
                           ([key, value]) => (
-                            <div key={key} style={{ marginBottom: '6px' }}>
-                              <div
-                                style={{
-                                  color: 'rgba(255, 165, 0, 0.9)',
-                                  fontWeight: '500',
-                                  marginBottom: '2px',
-                                }}
+                            <div key={key} style={{ marginBottom: '4px' }}>
+                              <span style={{ color: 'rgba(255, 165, 0, 0.9)' }}>
+                                {key}
+                              </span>
+                              <span
+                                style={{ color: 'rgba(255, 255, 255, 0.7)' }}
                               >
-                                {key}:
-                              </div>
-                              <div
-                                style={{
-                                  color: 'rgba(255, 255, 255, 0.7)',
-                                  paddingLeft: '8px',
-                                }}
-                              >
+                                :{' '}
+                              </span>
+                              <span style={{ color: 'rgba(255, 193, 7, 0.9)' }}>
                                 {formatValue(value)}
-                              </div>
+                              </span>
                             </div>
                           )
                         )}
@@ -1066,43 +1333,54 @@ const DebuggerOverlayComponent: React.FC<{
                     </div>
                   )}
 
-                  {/* Hooks */}
-                  {state.capturedData.hooks.length > 0 && (
-                    <div>
-                      <div
-                        style={{
-                          fontWeight: '600',
-                          color: 'rgba(255, 255, 255, 0.8)',
-                          marginBottom: '8px',
-                        }}
-                      >
-                        Hooks ({state.capturedData.hooks.length})
+                  {/* Component Info */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <div
+                      style={{
+                        fontWeight: '600',
+                        color: 'rgba(255, 255, 255, 0.8)',
+                        marginBottom: '8px',
+                      }}
+                    >
+                      Component Info:
+                    </div>
+                    <div
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        padding: '8px',
+                        borderRadius: '4px',
+                        border: '1px solid rgba(255, 255, 255, 0.05)',
+                        fontFamily: 'monospace',
+                        fontSize: '11px',
+                        lineHeight: '1.4',
+                      }}
+                    >
+                      <div style={{ marginBottom: '4px' }}>
+                        <span style={{ color: 'rgba(255, 165, 0, 0.9)' }}>
+                          Render Count
+                        </span>
+                        <span style={{ color: 'rgba(255, 255, 255, 0.7)' }}>
+                          :{' '}
+                        </span>
+                        <span style={{ color: 'rgba(255, 193, 7, 0.9)' }}>
+                          {state.capturedData.renderCount}
+                        </span>
                       </div>
-                      <div
-                        style={{
-                          display: 'flex',
-                          gap: '4px',
-                          flexWrap: 'wrap',
-                        }}
-                      >
-                        {state.capturedData.hooks.map((hook, index) => (
-                          <span
-                            key={index}
-                            style={{
-                              background: 'rgba(78, 205, 196, 0.1)',
-                              color: 'rgba(78, 205, 196, 0.9)',
-                              padding: '2px 6px',
-                              borderRadius: '3px',
-                              fontSize: '10px',
-                              border: '1px solid rgba(78, 205, 196, 0.2)',
-                            }}
-                          >
-                            {hook.type}
-                          </span>
-                        ))}
+                      <div>
+                        <span style={{ color: 'rgba(255, 165, 0, 0.9)' }}>
+                          Last Render
+                        </span>
+                        <span style={{ color: 'rgba(255, 255, 255, 0.7)' }}>
+                          :{' '}
+                        </span>
+                        <span style={{ color: 'rgba(255, 193, 7, 0.9)' }}>
+                          {new Date(
+                            state.capturedData.lastRenderTime
+                          ).toLocaleTimeString()}
+                        </span>
                       </div>
                     </div>
-                  )}
+                  </div>
                 </>
               ) : (
                 <div
@@ -1113,7 +1391,8 @@ const DebuggerOverlayComponent: React.FC<{
                     fontSize: '11px',
                   }}
                 >
-                  Waiting for breakpoint...
+                  No component data available. Set a breakpoint to capture
+                  component state.
                 </div>
               )}
             </div>
@@ -1143,6 +1422,7 @@ export function DebuggerWidget() {
       logs: true,
       breakpoints: false,
       components: false,
+      callStack: false,
     },
     logs: [
       {
@@ -1163,15 +1443,17 @@ export function DebuggerWidget() {
     connectToCDP();
   }, []);
 
-  // Send initial breakpoints to overlay
+  // Send initial breakpoints to parent window
   useEffect(() => {
-    window.parent.postMessage(
-      {
-        type: 'updateBreakpoints',
-        payload: { breakpoints: debuggerState.breakpoints },
-      },
-      '*'
-    );
+    if (window.opener) {
+      window.opener.postMessage(
+        {
+          type: 'updateBreakpoints',
+          payload: { breakpoints: debuggerState.breakpoints },
+        },
+        '*'
+      );
+    }
   }, []);
 
   const enableCDPDomains = async (ws: WebSocket) => {
@@ -1329,67 +1611,79 @@ export function DebuggerWidget() {
             timestamp: Date.now(),
           };
 
+          // Find the actual breakpoint that was hit
+          const hitBreakpoint = debuggerState.breakpoints.find(
+            (bp) => bp.line === breakpointInfo.line && bp.enabled
+          );
+
+          // Use the breakpoint's component name if available, otherwise use the function name
+          const componentName =
+            hitBreakpoint?.component || breakpointInfo.component;
+
           // Update state with pause info and automatically select the breakpoint
-          setDebuggerState((prev) => {
-            const newState = {
-              ...prev,
-              isPaused: true,
-              currentBreakpoint: breakpointInfo,
-              selectedBreakpoint: breakpointInfo.id, // Auto-select to show inspector
-              sections: { ...prev.sections, breakpoints: true },
-              capturedData: {
-                props: {
-                  title: 'Sample Component',
-                  count: 42,
-                  isActive: true,
-                },
-                state: {
-                  loading: false,
-                  data: { id: 1, name: 'Test Item' },
-                  error: null,
-                },
-                context: {
-                  theme: 'dark',
-                  user: { id: 123, name: 'John Doe' },
-                },
-                hooks: [
-                  { type: 'useState', value: false, index: 0 },
-                  { type: 'useEffect', value: undefined, index: 1 },
-                  { type: 'useContext', value: { theme: 'dark' }, index: 2 },
-                ],
-                renderCount: 15,
-                lastRenderTime: Date.now(),
-              },
-            };
+          setDebuggerState((prev) => ({
+            ...prev,
+            isPaused: true,
+            currentBreakpoint: breakpointInfo,
+            selectedBreakpoint: hitBreakpoint?.id || breakpointInfo.id, // Auto-select to show inspector
+            sections: {
+              ...prev.sections,
+              breakpoints: true,
+              callStack: true,
+            },
+            callStack: msg.params.callFrames || [],
+            // Don't clear capturedData - preserve existing data
+          }));
 
-            // Immediately send size update to parent before pause takes effect
-            setTimeout(() => {
-              const debuggerElement = document.querySelector(
-                '[data-debugger-widget]'
-              ) as HTMLElement;
-              if (debuggerElement) {
-                const rect = debuggerElement.getBoundingClientRect();
-                window.parent.postMessage(
-                  {
-                    type: 'DEBUGGER_SIZE',
-                    payload: {
-                      width: Math.ceil(rect.width),
-                      height: Math.ceil(rect.height),
-                    },
-                  },
-                  '*'
-                );
-              }
-            }, 0);
-
-            return newState;
-          });
+          // Try to get component data using the breakpoint ID if available
+          if (hitBreakpoint?.breakpointId) {
+            // Request data using the breakpoint ID which should be associated with the component fiber
+            if (window.opener) {
+              const requestId = Date.now().toString();
+              const handleResponse = (event: MessageEvent) => {
+                if (
+                  event.data.requestId === requestId &&
+                  event.data.type === 'BREAKPOINT_COMPONENT_DATA_RESPONSE'
+                ) {
+                  console.log(
+                    '[Debugger] Received BREAKPOINT_COMPONENT_DATA_RESPONSE',
+                    event.data.payload
+                  );
+                  window.removeEventListener('message', handleResponse);
+                  if (event.data.payload) {
+                    setDebuggerState((prev) => ({
+                      ...prev,
+                      capturedData: event.data.payload,
+                    }));
+                  }
+                }
+              };
+              window.addEventListener('message', handleResponse);
+              window.opener.postMessage(
+                {
+                  type: 'GET_BREAKPOINT_COMPONENT_DATA',
+                  payload: { breakpointId: hitBreakpoint.breakpointId },
+                  requestId,
+                },
+                '*'
+              );
+            }
+          } else if (componentName && componentName !== 'Unknown') {
+            // Fallback to component name-based lookup
+            // Find the breakpoint for this component and request its data
+            const breakpoint = debuggerState.breakpoints.find(
+              (bp) => bp.component === componentName
+            );
+            if (breakpoint) {
+              requestComponentDataFromTarget(breakpoint.id);
+            }
+          }
 
           addLog(
             'info',
-            `Paused: ${msg.params.reason || 'breakpoint'} at ${
-              breakpointInfo.component
-            }:${breakpointInfo.line}`
+            `Paused: ${msg.params.reason || 'breakpoint'} at ${componentName}:${
+              breakpointInfo.line
+            }`
           );
         }
 
@@ -1400,7 +1694,7 @@ export function DebuggerWidget() {
             isPaused: false,
             currentBreakpoint: undefined,
             selectedBreakpoint: undefined,
-            capturedData: undefined,
+            // Preserve capturedData - don't clear it
           }));
           addLog('info', 'Execution resumed');
         }
@@ -1427,6 +1721,84 @@ export function DebuggerWidget() {
     } catch (e) {
       console.error('Failed to connect to CDP:', e);
       addLog('error', `Failed to connect to CDP: ${e}`);
+    }
+  };
+
+  // Function to request component data from the target app by breakpoint ID
+  const requestComponentDataFromTarget = (breakpointId: string) => {
+    console.log(
+      '[Debugger] Requesting component data for breakpoint:',
+      breakpointId
+    );
+    if (window.opener) {
+      const requestId = Date.now().toString();
+      // Set up response handler
+      const handleResponse = (event: MessageEvent) => {
+        if (
+          event.data.requestId === requestId &&
+          event.data.type === 'BREAKPOINT_COMPONENT_DATA_RESPONSE'
+        ) {
+          console.log(
+            '[Debugger] Received BREAKPOINT_COMPONENT_DATA_RESPONSE',
+            event.data.payload
+          );
+          window.removeEventListener('message', handleResponse);
+          if (event.data.payload) {
+            setDebuggerState((prev) => ({
+              ...prev,
+              capturedData: event.data.payload,
+            }));
+          }
+        }
+      };
+      window.addEventListener('message', handleResponse);
+      // Request the data
+      window.opener.postMessage(
+        {
+          type: 'GET_BREAKPOINT_COMPONENT_DATA',
+          payload: { breakpointId },
+          requestId,
+        },
+        '*'
+      );
+    }
+  };
+
+  // Function to get all breakpoint component data
+  const getAllBreakpointComponentData = () => {
+    console.log('[Debugger] Requesting all breakpoint component data');
+    if (window.opener) {
+      const requestId = Date.now().toString();
+      // Set up response handler
+      const handleResponse = (event: MessageEvent) => {
+        if (
+          event.data.requestId === requestId &&
+          event.data.type === 'ALL_BREAKPOINT_COMPONENT_DATA_RESPONSE'
+        ) {
+          console.log(
+            '[Debugger] Received ALL_BREAKPOINT_COMPONENT_DATA_RESPONSE',
+            event.data.payload
+          );
+          window.removeEventListener('message', handleResponse);
+          if (event.data.payload) {
+            // Update the debugger state with all breakpoint component data
+            setDebuggerState((prev) => ({
+              ...prev,
+              allBreakpointComponentData: event.data.payload,
+            }));
+          }
+        }
+      };
+      window.addEventListener('message', handleResponse);
+      // Request the data
+      window.opener.postMessage(
+        {
+          type: 'GET_ALL_BREAKPOINT_COMPONENT_DATA',
+          payload: {},
+          requestId,
+        },
+        '*'
+      );
     }
   };
 
@@ -1493,7 +1865,7 @@ export function DebuggerWidget() {
           breakpoints: [
             ...prev.breakpoints,
             {
-              id: Date.now().toString(),
+              id: result.breakpointId,
               component: componentName,
               line,
               enabled: true,
@@ -1503,25 +1875,41 @@ export function DebuggerWidget() {
         }));
         addLog('info', `Breakpoint set at ${componentName}:${line}`);
 
-        // Send updated breakpoints to overlay
-        window.parent.postMessage(
-          {
-            type: 'updateBreakpoints',
-            payload: {
-              breakpoints: [
-                ...debuggerState.breakpoints,
-                {
-                  id: Date.now().toString(),
-                  component: componentName,
-                  line,
-                  enabled: true,
-                  breakpointId: result.breakpointId,
-                },
-              ],
+        // Associate breakpoint with component fiber in the injected code
+        if (window.opener) {
+          window.opener.postMessage(
+            {
+              type: 'associateBreakpointWithComponent',
+              payload: {
+                breakpointNumber: result.breakpointId,
+                componentName: componentName,
+              },
             },
-          },
-          '*'
-        );
+            '*'
+          );
+        }
+
+        // Send updated breakpoints to parent window
+        if (window.opener) {
+          window.opener.postMessage(
+            {
+              type: 'updateBreakpoints',
+              payload: {
+                breakpoints: [
+                  ...debuggerState.breakpoints,
+                  {
+                    id: result.breakpointId,
+                    component: componentName,
+                    line,
+                    enabled: true,
+                    breakpointId: result.breakpointId,
+                  },
+                ],
+              },
+            },
+            '*'
+          );
+        }
       }
     } catch (error) {
       addLog('error', `Failed to set breakpoint: ${error}`);
@@ -1536,14 +1924,29 @@ export function DebuggerWidget() {
           (bp) => bp.breakpointId !== breakpointId
         );
 
-        // Send updated breakpoints to overlay
-        window.parent.postMessage(
-          {
-            type: 'updateBreakpoints',
-            payload: { breakpoints: newBreakpoints },
-          },
-          '*'
-        );
+        // Remove breakpoint association from the injected code
+        if (window.opener) {
+          window.opener.postMessage(
+            {
+              type: 'removeBreakpointAssociation',
+              payload: {
+                breakpointNumber: breakpointId,
+              },
+            },
+            '*'
+          );
+        }
+
+        // Send updated breakpoints to parent window
+        if (window.opener) {
+          window.opener.postMessage(
+            {
+              type: 'updateBreakpoints',
+              payload: { breakpoints: newBreakpoints },
+            },
+            '*'
+          );
+        }
 
         return {
           ...prev,
@@ -1564,7 +1967,7 @@ export function DebuggerWidget() {
         isPaused: false,
         currentBreakpoint: undefined,
         selectedBreakpoint: undefined,
-        capturedData: undefined,
+        // Preserve capturedData - don't clear it
       }));
       addLog('info', 'Execution resumed');
     } catch (error) {
@@ -1575,22 +1978,86 @@ export function DebuggerWidget() {
   const stepOver = async () => {
     try {
       await sendCDPCommand('Debugger.stepOver');
+      // Preserve capturedData during stepping
       addLog('info', 'Stepping over');
     } catch (error) {
       addLog('error', `Failed to step over: ${error}`);
     }
   };
 
-  // Listen for messages from parent (main app)
+  const stepInto = async () => {
+    try {
+      await sendCDPCommand('Debugger.stepInto');
+      // Preserve capturedData during stepping
+      addLog('info', 'Stepping into');
+    } catch (error) {
+      addLog('error', `Failed to step into: ${error}`);
+    }
+  };
+
+  const stepOut = async () => {
+    try {
+      await sendCDPCommand('Debugger.stepOut');
+      // Preserve capturedData during stepping
+      addLog('info', 'Stepping out');
+    } catch (error) {
+      addLog('error', `Failed to step out: ${error}`);
+    }
+  };
+
+  const pauseExecution = async () => {
+    try {
+      await sendCDPCommand('Debugger.pause');
+      addLog('info', 'Execution paused');
+    } catch (error) {
+      addLog('error', `Failed to pause: ${error}`);
+    }
+  };
+
+  const restartFrame = async () => {
+    try {
+      await sendCDPCommand('Debugger.restartFrame');
+      addLog('info', 'Frame restarted');
+    } catch (error) {
+      addLog('error', `Failed to restart frame: ${error}`);
+    }
+  };
+
+  const continueToLocation = async () => {
+    if (!debuggerState.currentBreakpoint) return;
+
+    try {
+      await sendCDPCommand('Debugger.continueToLocation', {
+        location: {
+          scriptId: debuggerState.currentBreakpoint.id,
+          lineNumber: debuggerState.currentBreakpoint.line - 1,
+        },
+      });
+      addLog('info', 'Continue to location executed');
+    } catch (error) {
+      addLog('error', `Failed to continue to location: ${error}`);
+    }
+  };
+
+  // Listen for messages from parent window (main app)
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
-      if (event.source !== window.parent) return;
+      if (event.source !== window.opener) return;
 
       const { type, payload } = event.data;
 
       switch (type) {
         case 'SELECT_COMPONENT':
           setSelectedComponent(payload);
+
+          // If we have real fiber data, use it instead of mock data
+          if (payload.fiberData) {
+            setDebuggerState((prev) => ({
+              ...prev,
+              capturedData: payload.fiberData,
+            }));
+          }
+
           if (debuggerState.isAddingBreakpoints && payload) {
             setBreakpoint(
               payload.sourceLocation.file,
@@ -1602,25 +2069,6 @@ export function DebuggerWidget() {
         case 'TOGGLE_DEBUGGER':
           setDebuggerState((prev) => ({ ...prev, isOpen: !prev.isOpen }));
           break;
-        case 'REQUEST_SIZE_UPDATE':
-          // Trigger immediate size update
-          const debuggerElement = document.querySelector(
-            '[data-debugger-widget]'
-          ) as HTMLElement;
-          if (debuggerElement && debuggerState.isOpen) {
-            const rect = debuggerElement.getBoundingClientRect();
-            window.parent.postMessage(
-              {
-                type: 'DEBUGGER_SIZE',
-                payload: {
-                  width: Math.ceil(rect.width),
-                  height: Math.ceil(rect.height),
-                },
-              },
-              '*'
-            );
-          }
-          break;
       }
     }
 
@@ -1631,160 +2079,104 @@ export function DebuggerWidget() {
     };
   }, [debuggerState.isAddingBreakpoints, debuggerState.isOpen]);
 
-  // Handle size updates with ResizeObserver for automatic detection
+  // Keyboard shortcuts for debugging actions
   useEffect(() => {
-    let resizeObserver: ResizeObserver | null = null;
-    let timeoutId: NodeJS.Timeout | null = null;
+    function handleKeyDown(event: KeyboardEvent) {
+      // Only handle shortcuts when debugger is open and paused
+      if (!debuggerState.isOpen || !debuggerState.isPaused) return;
 
-    function postSize() {
-      if (!debuggerState.isOpen) {
-        window.parent.postMessage(
-          {
-            type: 'DEBUGGER_SIZE',
-            payload: { width: 0, height: 0 },
-          },
-          '*'
-        );
-        return;
+      // Prevent default behavior for debugger shortcuts
+      const isDebuggerShortcut =
+        event.key === 'F8' ||
+        event.key === 'F10' ||
+        event.key === 'F11' ||
+        (event.shiftKey && event.key === 'F11') ||
+        event.key === 'F5';
+
+      if (isDebuggerShortcut) {
+        event.preventDefault();
       }
 
-      // Get the actual size of the debugger widget
-      const debuggerElement = document.querySelector(
-        '[data-debugger-widget]'
-      ) as HTMLElement;
-      if (debuggerElement) {
-        const rect = debuggerElement.getBoundingClientRect();
-        const sizeData = {
-          width: Math.ceil(rect.width),
-          height: Math.ceil(rect.height),
-        };
-        console.log('Debugger widget size:', sizeData);
-        window.parent.postMessage(
-          {
-            type: 'DEBUGGER_SIZE',
-            payload: sizeData,
-          },
-          '*'
-        );
-      } else {
-        // If element not found, try again after a short delay
-        setTimeout(postSize, 50);
+      switch (event.key) {
+        case 'F8':
+          resumeExecution();
+          break;
+        case 'F10':
+          stepOver();
+          break;
+        case 'F11':
+          if (event.shiftKey) {
+            stepOut();
+          } else {
+            stepInto();
+          }
+          break;
+        case 'F5':
+          pauseExecution();
+          break;
       }
     }
 
-    // Debounced postSize function to avoid excessive messages
-    function debouncedPostSize() {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      timeoutId = setTimeout(postSize, 16); // ~60fps
-    }
-
-    // Initial size post with retry logic
-    const initialTimeout = setTimeout(() => {
-      debouncedPostSize();
-    }, 100);
-
-    // Also listen for window resize events
-    const handleWindowResize = () => {
-      debouncedPostSize();
-    };
-    window.addEventListener('resize', handleWindowResize);
-
-    // Set up ResizeObserver for automatic size detection
-    const debuggerElement = document.querySelector(
-      '[data-debugger-widget]'
-    ) as HTMLElement;
-
-    let mutationObserver: MutationObserver | null = null;
-
-    if (debuggerElement && window.ResizeObserver) {
-      resizeObserver = new ResizeObserver(() => {
-        debouncedPostSize();
-      });
-      resizeObserver.observe(debuggerElement);
-    } else if (debuggerElement) {
-      // Fallback: use MutationObserver to detect DOM changes
-      mutationObserver = new MutationObserver(() => {
-        debouncedPostSize();
-      });
-      mutationObserver.observe(debuggerElement, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['style', 'class'],
-      });
-    }
+    window.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      clearTimeout(initialTimeout);
-      window.removeEventListener('resize', handleWindowResize);
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-      }
-      if (mutationObserver) {
-        mutationObserver.disconnect();
-      }
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [
-    debuggerState.isOpen,
-    debuggerState.selectedBreakpoint,
-    debuggerState.currentBreakpoint,
-    debuggerState.sections,
-    debuggerState.logs.length,
-    debuggerState.breakpoints.length,
-  ]);
+  }, [debuggerState.isOpen, debuggerState.isPaused]);
 
-  // Immediate size update when debugger opens/closes or inspector state changes
+  // Listen for messages from parent window
   useEffect(() => {
-    const updateSize = () => {
-      if (!debuggerState.isOpen) {
-        // Immediately hide when closed
-        window.parent.postMessage(
-          {
-            type: 'DEBUGGER_SIZE',
-            payload: { width: 0, height: 0 },
-          },
-          '*'
+    function handleMessage(event: MessageEvent) {
+      // Only accept messages from the parent window
+      if (event.source !== window.opener) return;
+
+      console.log('[Debugger] Received message from parent:', event.data);
+      const { type, payload } = event.data;
+
+      if (type === 'COMPONENT_SELECTION') {
+        setSelectedComponent(payload);
+      } else if (type === 'COMPONENT_DATA_UPDATE') {
+        // Handle automatic component data updates
+        console.log(
+          '[Debugger] Received automatic component data update:',
+          payload
         );
-        return;
-      }
+        const { breakpointNumber, componentData, timestamp } = payload;
 
-      // Small delay to ensure DOM is rendered
-      const timeoutId = setTimeout(() => {
-        const debuggerElement = document.querySelector(
-          '[data-debugger-widget]'
-        ) as HTMLElement;
-        if (debuggerElement) {
-          const rect = debuggerElement.getBoundingClientRect();
-          window.parent.postMessage(
-            {
-              type: 'DEBUGGER_SIZE',
-              payload: {
-                width: Math.ceil(rect.width),
-                height: Math.ceil(rect.height),
-              },
-            },
-            '*'
+        // Update the captured data immediately
+        setDebuggerState((prev) => {
+          console.log(
+            '[Debugger] Updating captured data from:',
+            prev.capturedData?.renderCount,
+            'to:',
+            componentData.renderCount
           );
-        }
-      }, 50);
+          return {
+            ...prev,
+            capturedData: componentData,
+          };
+        });
 
-      return () => clearTimeout(timeoutId);
-    };
+        // Also update the allBreakpointComponentData
+        console.log('[Debugger] Updating allBreakpointComponentData');
+        setDebuggerState((prev) => ({
+          ...prev,
+          allBreakpointComponentData: {
+            ...prev.allBreakpointComponentData,
+            [breakpointNumber]: componentData,
+          },
+        }));
+      }
+    }
 
-    updateSize();
-  }, [
-    debuggerState.isOpen,
-    debuggerState.selectedBreakpoint, // Inspector panel toggle
-    debuggerState.currentBreakpoint, // Inspector panel toggle
-  ]);
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []); // Remove dependencies to avoid stale closures
 
   const sendToParent = (type: string, payload?: any) => {
-    window.parent.postMessage({ type, payload }, '*');
+    if (window.opener) {
+      window.opener.postMessage({ type, payload }, '*');
+    }
   };
 
   return (
@@ -1794,6 +2186,15 @@ export function DebuggerWidget() {
       cdpSocket={cdpSocket}
       isConnected={isConnected}
       sendCDPCommand={sendCDPCommand}
+      resumeExecution={resumeExecution}
+      stepOver={stepOver}
+      stepInto={stepInto}
+      stepOut={stepOut}
+      pauseExecution={pauseExecution}
+      restartFrame={restartFrame}
+      continueToLocation={continueToLocation}
+      requestComponentData={requestComponentDataFromTarget}
+      getAllBreakpointComponentData={getAllBreakpointComponentData}
     />
   );
 }

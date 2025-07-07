@@ -48,7 +48,12 @@ class SafeComponentStackGenerator {
     (Error as any).prepareStackTrace = undefined;
 
     // Mock React dispatcher to prevent side effects
-    const previousDispatcher = this.getMockDispatcher();
+    let previousDispatcher: any = null;
+    try {
+      previousDispatcher = this.getMockDispatcher();
+    } catch (error) {
+      console.warn('Failed to mock React dispatcher:', error);
+    }
 
     try {
       // Determine if it's a class or function component
@@ -96,7 +101,11 @@ class SafeComponentStackGenerator {
       // Restore everything
       this.reentry = false;
       (Error as any).prepareStackTrace = previousPrepareStackTrace;
-      this.restoreDispatcher(previousDispatcher);
+      try {
+        this.restoreDispatcher(previousDispatcher);
+      } catch (error) {
+        console.warn('Failed to restore React dispatcher:', error);
+      }
     }
 
     // Parse the captured stack trace
@@ -148,7 +157,11 @@ class SafeComponentStackGenerator {
   private getMockDispatcher(): any {
     // Mock React's current dispatcher to prevent side effects
     const internals = this.getReactInternals();
-    if (internals && internals.ReactCurrentDispatcher) {
+    if (
+      internals &&
+      internals.ReactCurrentDispatcher &&
+      internals.ReactCurrentDispatcher.current !== undefined
+    ) {
       const previous = internals.ReactCurrentDispatcher.current;
 
       // Set empty dispatcher to prevent hooks from running
@@ -161,7 +174,11 @@ class SafeComponentStackGenerator {
 
   private restoreDispatcher(previousDispatcher: any): void {
     const internals = this.getReactInternals();
-    if (internals && internals.ReactCurrentDispatcher && previousDispatcher) {
+    if (
+      internals &&
+      internals.ReactCurrentDispatcher &&
+      previousDispatcher !== undefined
+    ) {
       internals.ReactCurrentDispatcher.current = previousDispatcher;
     }
   }
@@ -226,8 +243,8 @@ class DebugOverlay {
   private mouseY: number = 0;
   private animationId: number | null = null;
   private stackGenerator: SafeComponentStackGenerator;
-  private widgetIframe: HTMLIFrameElement | null = null;
-  private widgetOrigin: string | null = null;
+  private debuggerWindow: Window | null = null;
+  private debuggerWindowOrigin: string | null = null;
   private isHighlightingEnabled: boolean = false;
   private breakpoints: Array<{
     id: string;
@@ -247,10 +264,14 @@ class DebugOverlay {
     this.createDebuggerWidget();
     this.startAnimation();
 
-    // Listen for messages from the widget iframe
-    window.addEventListener('message', (event) => {
+    // Listen for messages from the debugger window
+    window.addEventListener('message', async (event) => {
       console.log('Parent received message:', event);
-      if (!this.widgetOrigin || event.origin !== this.widgetOrigin) return;
+      if (
+        !this.debuggerWindowOrigin ||
+        event.origin !== this.debuggerWindowOrigin
+      )
+        return;
       const { type, payload, width, height } = event.data || {};
 
       if (type === 'toggleHighlighting') {
@@ -262,69 +283,164 @@ class DebugOverlay {
         this.breakpoints = payload?.breakpoints || [];
       }
 
+      if (type === 'associateBreakpointWithComponent') {
+        // Import the function from internals
+        const { associateBreakpointWithComponent } = await import(
+          './internals'
+        );
+        const success = associateBreakpointWithComponent(
+          payload.breakpointNumber,
+          payload.componentName
+        );
+        if (success) {
+          console.log(
+            `Successfully associated breakpoint ${payload.breakpointNumber} with component ${payload.componentName}`
+          );
+        }
+      }
+
+      if (type === 'removeBreakpointAssociation') {
+        // Import the function from internals
+        const { removeBreakpointAssociation } = await import('./internals');
+        removeBreakpointAssociation(payload.breakpointNumber);
+        console.log(
+          `Removed breakpoint association for ${payload.breakpointNumber}`
+        );
+      }
+
       if (type === 'closeWidget') {
         this.hideWidget();
+      }
+
+      if (type === 'GET_COMPONENT_DATA') {
+        console.log(
+          '[Target] Received GET_COMPONENT_DATA for',
+          payload.componentName
+        );
+        const { componentName, requestId } = payload;
+        const componentData = this.getComponentDataByName(componentName);
+        // Send response back to debugger
+        if (this.debuggerWindow && !this.debuggerWindow.closed) {
+          console.log(
+            '[Target] Sending COMPONENT_DATA_RESPONSE',
+            componentData
+          );
+          this.debuggerWindow.postMessage(
+            {
+              type: 'COMPONENT_DATA_RESPONSE',
+              payload: componentData,
+              requestId,
+            },
+            this.debuggerWindowOrigin
+          );
+        }
+      }
+
+      if (type === 'GET_BREAKPOINT_COMPONENT_DATA') {
+        console.log(
+          '[Target] Received GET_BREAKPOINT_COMPONENT_DATA for',
+          payload.breakpointId
+        );
+        const { breakpointId, requestId } = payload;
+        // Access the function through the global FiberDataBridge
+        const componentData = (
+          window as any
+        ).FiberDataBridge?.getComponentDataForBreakpoint(breakpointId);
+        // Send response back to debugger
+        if (this.debuggerWindow && !this.debuggerWindow.closed) {
+          console.log(
+            '[Target] Sending BREAKPOINT_COMPONENT_DATA_RESPONSE',
+            componentData
+          );
+          this.debuggerWindow.postMessage(
+            {
+              type: 'BREAKPOINT_COMPONENT_DATA_RESPONSE',
+              payload: componentData,
+              requestId,
+            },
+            this.debuggerWindowOrigin
+          );
+        }
+      }
+
+      if (type === 'GET_ALL_BREAKPOINT_COMPONENT_DATA') {
+        console.log('[Target] Received GET_ALL_BREAKPOINT_COMPONENT_DATA');
+        const { requestId } = payload;
+        // Import the function from internals
+        const { getAllBreakpointComponentData } = await import('./internals');
+        const allBreakpointData = getAllBreakpointComponentData();
+        // Send response back to debugger
+        if (this.debuggerWindow && !this.debuggerWindow.closed) {
+          console.log(
+            '[Target] Sending ALL_BREAKPOINT_COMPONENT_DATA_RESPONSE',
+            allBreakpointData
+          );
+          this.debuggerWindow.postMessage(
+            {
+              type: 'ALL_BREAKPOINT_COMPONENT_DATA_RESPONSE',
+              payload: allBreakpointData,
+              requestId,
+            },
+            this.debuggerWindowOrigin
+          );
+        }
       }
     });
   }
 
   private createDebuggerWidget() {
-    if (typeof document === 'undefined') return;
+    if (typeof window === 'undefined') return;
 
-    // Create an iframe to host the debugger UI
-    const iframe = document.createElement('iframe');
-    iframe.id = 'react-debugger-iframe';
-    iframe.setAttribute('allowtransparency', 'true');
-    iframe.style.cssText = `
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      width: 422px;
-      height: 355px;
-      border: none;
-      background: transparent;
-      z-index: 999999;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-    `;
-    iframe.src = 'http://127.0.0.1:5679/debugger';
-    document.body.appendChild(iframe);
-    this.widgetIframe = iframe;
-    this.widgetOrigin = new URL(iframe.src).origin;
+    // Open debugger in a new window
+    const debuggerUrl = 'http://127.0.0.1:5679/debugger';
+    const windowFeatures =
+      'width=720,height=600,resizable=yes,scrollbars=yes,status=no,location=no,toolbar=no,menubar=no';
 
-    // Listen for size messages from the iframe
+    this.debuggerWindow = window.open(
+      debuggerUrl,
+      'react-debugger',
+      windowFeatures
+    );
+    this.debuggerWindowOrigin = new URL(debuggerUrl).origin;
+
+    if (!this.debuggerWindow) {
+      console.error('Failed to open debugger window. Popup might be blocked.');
+      return;
+    }
+
+    // Listen for messages from the debugger window
     window.addEventListener('message', (event) => {
-      if (event.source !== iframe.contentWindow) return;
+      if (event.source !== this.debuggerWindow) return;
 
       const { type, payload } = event.data;
 
-      if (type === 'DEBUGGER_SIZE') {
-        const { width, height } = payload;
-
-        // Update iframe size based on debugger widget size
-        if (width > 0 && height > 0) {
-          iframe.style.width = `${width}px`;
-          iframe.style.height = `${height}px`;
-          iframe.style.display = 'block';
-        } else {
-          // Hide iframe when debugger is closed
-          iframe.style.display = 'none';
-        }
-      } else if (type === 'TOGGLE_DEBUGGER') {
-        // Handle debugger toggle request from iframe
-        if (iframe.style.display === 'none') {
-          iframe.style.display = 'block';
-        } else {
-          iframe.style.display = 'none';
-        }
+      if (type === 'TOGGLE_DEBUGGER') {
+        // Handle debugger toggle request from debugger window
+        this.toggleDebugger();
+      } else if (type === 'UPDATE_BREAKPOINTS') {
+        // Update breakpoints from debugger window
+        this.breakpoints = payload.breakpoints || [];
+      } else if (type === 'TOGGLE_HIGHLIGHTING') {
+        // Toggle highlighting mode
+        this.isHighlightingEnabled = payload.enabled;
       }
     });
+
+    // Handle window close
+    const checkWindowClosed = setInterval(() => {
+      if (this.debuggerWindow?.closed) {
+        clearInterval(checkWindowClosed);
+        this.debuggerWindow = null;
+        this.debuggerWindowOrigin = null;
+      }
+    }, 1000);
   }
 
   private hideWidget() {
-    if (this.widgetIframe) {
-      this.widgetIframe.style.display = 'none';
+    if (this.debuggerWindow && !this.debuggerWindow.closed) {
+      this.debuggerWindow.close();
+      this.debuggerWindow = null;
+      this.debuggerWindowOrigin = null;
     }
   }
 
@@ -396,17 +512,14 @@ class DebugOverlay {
   }
 
   private toggleDebugger() {
-    if (this.widgetIframe) {
-      const isVisible = this.widgetIframe.style.display !== 'none';
-      this.widgetIframe.style.display = isVisible ? 'none' : 'block';
-
-      // If showing, trigger a size update from the iframe
-      if (!isVisible && this.widgetIframe.contentWindow) {
-        this.widgetIframe.contentWindow.postMessage(
-          { type: 'REQUEST_SIZE_UPDATE' },
-          '*'
-        );
-      }
+    if (this.debuggerWindow && !this.debuggerWindow.closed) {
+      // If window exists, close it
+      this.debuggerWindow.close();
+      this.debuggerWindow = null;
+      this.debuggerWindowOrigin = null;
+    } else {
+      // If window doesn't exist, create it
+      this.createDebuggerWidget();
     }
   }
 
@@ -423,9 +536,10 @@ class DebugOverlay {
     // Find the component that rendered this element
     const componentInfo = this.getComponentForElement(clickedElement);
     if (componentInfo) {
-      const { type, name } = componentInfo;
+      const { type, name, fiberData } = componentInfo;
       console.log('Component type:', type);
       console.log('Component name:', name);
+      console.log('Fiber data:', fiberData);
 
       // Get source location
       const location = this.stackGenerator.getComponentSourceLocation(type);
@@ -438,6 +552,7 @@ class DebugOverlay {
           componentType: type,
           sourceLocation: location,
           boundingRect: componentInfo.rect,
+          fiberData: fiberData, // Pass the real fiber data
         });
       }
     }
@@ -448,14 +563,15 @@ class DebugOverlay {
     componentType: Function;
     sourceLocation: { file: string; line: number; column: number };
     boundingRect: DOMRect;
+    fiberData?: any;
   }) {
     if (
-      this.widgetIframe &&
-      this.widgetIframe.contentWindow &&
-      this.widgetOrigin
+      this.debuggerWindow &&
+      !this.debuggerWindow.closed &&
+      this.debuggerWindowOrigin
     ) {
       try {
-        this.widgetIframe.contentWindow.postMessage(
+        this.debuggerWindow.postMessage(
           {
             type: 'SELECT_COMPONENT',
             payload: {
@@ -467,9 +583,10 @@ class DebugOverlay {
                 width: componentInfo.boundingRect.width,
                 height: componentInfo.boundingRect.height,
               },
+              fiberData: componentInfo.fiberData, // Include real fiber data
             },
           },
-          this.widgetOrigin
+          this.debuggerWindowOrigin
         );
       } catch (err) {
         console.error('postMessage error:', err);
@@ -534,7 +651,7 @@ class DebugOverlay {
 
   private getComponentForElement(
     element: HTMLElement
-  ): { rect: DOMRect; name: string; type: Function } | null {
+  ): { rect: DOMRect; name: string; type: Function; fiberData?: any } | null {
     // Look up the element in your existing HTMLMap
     const fiber = getFiberFromElement(element);
     if (!fiber) return null;
@@ -543,15 +660,205 @@ class DebugOverlay {
     let currentFiber: FiberNode | null = fiber;
     while (currentFiber) {
       if (typeof currentFiber.type === 'function') {
-        // Found a component! Now get its bounding rect
+        // Found a component! Now get its bounding rect and fiber data
         const rect = this.getComponentBoundingRect(currentFiber);
         const name = currentFiber.type.name || '(anonymous)';
-        return { rect, name, type: currentFiber.type };
+
+        // Extract real fiber data
+        const fiberData = this.extractFiberData(currentFiber);
+
+        return { rect, name, type: currentFiber.type, fiberData };
       }
       currentFiber = currentFiber.return; // Go up to parent
     }
 
     return null;
+  }
+
+  private extractFiberData(fiber: FiberNode) {
+    if (!fiber) return null;
+
+    // Extract props
+    const props = fiber.memoizedProps || {};
+
+    // Extract state (for function components)
+    const state = this.extractStateFromFiber(fiber);
+
+    // Extract hooks
+    const hooks = this.extractHooksFromFiber(fiber);
+
+    // Extract context
+    const context = this.extractContextFromFiber(fiber);
+
+    return {
+      props,
+      state,
+      context,
+      hooks,
+      renderCount: 0, // Could be derived from fiber.actualDuration
+      lastRenderTime: Date.now(),
+    };
+  }
+
+  private extractStateFromFiber(fiber: FiberNode): Record<string, any> {
+    const state: Record<string, any> = {};
+
+    if (fiber.memoizedState) {
+      // For function components, state is in memoizedState
+      if (typeof fiber.memoizedState === 'object') {
+        // Handle different types of state
+        if (fiber.memoizedState.baseState !== undefined) {
+          // useReducer
+          state.reducer = fiber.memoizedState.baseState;
+        } else if (fiber.memoizedState.memoizedState !== undefined) {
+          // useState
+          state.state = fiber.memoizedState.memoizedState;
+        }
+      }
+    }
+
+    return state;
+  }
+
+  private extractHooksFromFiber(
+    fiber: FiberNode
+  ): Array<{ type: string; value: any; index: number; hookType?: string }> {
+    const hooks: Array<{
+      type: string;
+      value: any;
+      index: number;
+      hookType?: string;
+    }> = [];
+
+    if (!fiber.memoizedState) return hooks;
+
+    let currentHook = fiber.memoizedState;
+    let hookIndex = 0;
+
+    while (currentHook) {
+      const hookType = this.getHookType(currentHook);
+      const hookData = {
+        type: hookType,
+        value: currentHook.memoizedState,
+        index: hookIndex,
+        hookType: hookType,
+      };
+
+      hooks.push(hookData);
+
+      currentHook = currentHook.next;
+      hookIndex++;
+    }
+
+    return hooks;
+  }
+
+  private getHookType(hook: any): string {
+    if (!hook) return 'unknown';
+
+    // useEffect, useLayoutEffect, useInsertionEffect
+    if (hook.memoizedState !== null && typeof hook.memoizedState === 'object') {
+      if (
+        hook.memoizedState.hasOwnProperty('destroy') ||
+        hook.memoizedState.hasOwnProperty('create')
+      ) {
+        return 'useEffect';
+      }
+    }
+
+    // useState/useReducer (both use the same underlying mechanism)
+    if (hook.queue && hook.queue.lastRenderedReducer) {
+      // Check if it's the basic state reducer (useState) vs custom reducer
+      const isBasicStateReducer =
+        hook.queue.lastRenderedReducer.name === 'basicStateReducer';
+      return isBasicStateReducer ? 'useState' : 'useReducer';
+    }
+
+    // useMemo/useCallback (both cache [value, deps])
+    if (Array.isArray(hook.memoizedState) && hook.memoizedState.length === 2) {
+      // This is tricky to distinguish - both store [value, deps]
+      // You'd need to look at the cached value type
+      return typeof hook.memoizedState[0] === 'function'
+        ? 'useCallback'
+        : 'useMemo';
+    }
+
+    // useRef (memoizedState is the ref object itself)
+    if (
+      hook.memoizedState &&
+      typeof hook.memoizedState === 'object' &&
+      hook.memoizedState.hasOwnProperty('current')
+    ) {
+      return 'useRef';
+    }
+
+    // useContext
+    if (hook.memoizedState && hook.memoizedState._context) {
+      return 'useContext';
+    }
+
+    return 'unknown';
+  }
+
+  private extractContextFromFiber(fiber: FiberNode): Record<string, any> {
+    const context: Record<string, any> = {};
+
+    // Traverse up the fiber tree to find context providers
+    let currentFiber: FiberNode | null = fiber;
+    while (currentFiber) {
+      if (currentFiber.type && typeof currentFiber.type === 'object') {
+        // Check if this is a Context.Provider
+        const type = currentFiber.type as any;
+        if (type.$$typeof === Symbol.for('react.context')) {
+          const contextName = type._context?.displayName || 'Context';
+          context[contextName] = currentFiber.memoizedProps?.value;
+        }
+      }
+      currentFiber = currentFiber.return;
+    }
+
+    return context;
+  }
+
+  private getComponentDataByName(componentName: string) {
+    // Find the breakpoint for this component and get its data
+    const breakpoint = this.breakpoints.find(
+      (bp) => bp.component === componentName
+    );
+    if (
+      breakpoint &&
+      typeof window !== 'undefined' &&
+      (window as any).FiberDataBridge
+    ) {
+      return (window as any).FiberDataBridge.getComponentDataForBreakpoint(
+        breakpoint.id
+      );
+    }
+    return null;
+  }
+
+  private findFiberByName(
+    rootFiber: FiberNode,
+    componentName: string
+  ): FiberNode | null {
+    const fibers: FiberNode[] = [];
+
+    function traverse(fiber: FiberNode | null) {
+      if (!fiber) return;
+      fibers.push(fiber);
+      if (fiber.child) traverse(fiber.child);
+      if (fiber.sibling) traverse(fiber.sibling);
+    }
+
+    traverse(rootFiber);
+    return (
+      fibers.find((fiber) => {
+        if (typeof fiber.type === 'function') {
+          return fiber.type.name === componentName;
+        }
+        return false;
+      }) || null
+    );
   }
 
   private getComponentBoundingRect(componentFiber: FiberNode): DOMRect {

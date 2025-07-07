@@ -36,7 +36,6 @@ function App() {
 }
 
 export default App;
-
 function Child1() {
   return <div>Child1</div>;
 }
