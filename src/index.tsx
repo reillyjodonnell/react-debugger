@@ -1101,7 +1101,14 @@ class DebugOverlay {
 
 // Initialize the debugger overlay
 if (typeof window !== 'undefined') {
-  window.__reactDebuggerOverlay = new DebugOverlay();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      window.__reactDebuggerOverlay = new DebugOverlay();
+    });
+  } else {
+    // DOM is already ready
+    window.__reactDebuggerOverlay = new DebugOverlay();
+  }
 }
 
 declare global {

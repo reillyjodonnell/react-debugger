@@ -1,6 +1,6 @@
 {
-  "name": "react-debugger",
-  "version": "0.1.0",
+  "name": "@react-debugger/core",
+  "version": "0.1.0-alpha.1",
   "description": "A Chrome DevTools Protocol-based debugger for React applications",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -14,8 +14,11 @@
   "files": [
     "dist"
   ],
+  "bin": {
+    "@react-debugger/core": "dist/cli.js"
+  },
   "scripts": {
-    "build": "bun build src/index.tsx --outdir dist --target browser --format esm",
+    "build": "bun build src/index.tsx --outdir dist --target browser && bun build src/cli.ts --outdir dist --target node && bun build src/debugger-server.ts --outdir dist --target bun",
     "dev": "bun --watch src/index.tsx",
     "chrome": "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug http://localhost:5173",
     "prepublishOnly": "bun run build"
