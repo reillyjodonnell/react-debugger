@@ -343,9 +343,11 @@ class DebugOverlay {
         );
         const { breakpointId, requestId } = payload;
         // Access the function through the global FiberDataBridge
-        const componentData = (
+        const rawComponentData = (
           window as any
         ).FiberDataBridge?.getComponentDataForBreakpoint(breakpointId);
+        // Use the same serialization pattern for consistency
+        const componentData = this.serializeFiberData(rawComponentData);
         // Send response back to debugger
         if (this.debuggerWindow && !this.debuggerWindow.closed) {
           console.log(
@@ -368,7 +370,14 @@ class DebugOverlay {
         const { requestId } = payload;
         // Import the function from internals
         const { getAllBreakpointComponentData } = await import('./internals');
-        const allBreakpointData = getAllBreakpointComponentData();
+        const rawAllBreakpointData = getAllBreakpointComponentData();
+        // Serialize all breakpoint data using the same pattern
+        const allBreakpointData = Object.fromEntries(
+          Object.entries(rawAllBreakpointData).map(([key, value]) => [
+            key,
+            this.serializeFiberData(value),
+          ])
+        );
         // Send response back to debugger
         if (this.debuggerWindow && !this.debuggerWindow.closed) {
           console.log(
@@ -558,6 +567,51 @@ class DebugOverlay {
     }
   }
 
+  private serializeFiberData(fiberData: any): any {
+    if (!fiberData) return null;
+
+    try {
+      return {
+        // Hooks have a circular reference - serialize safely
+        hooks:
+          fiberData.hooks?.map((hook: any, index: number) => ({
+            hookType: hook.hookType,
+            index: hook.index,
+            value: typeof hook.value === 'object' ? '[Object]' : hook.value,
+            deps:
+              hook.hookType === 'useEffect'
+                ? JSON.stringify(hook.value.deps)
+                : null,
+            // Don't include 'next', 'queue', or other complex properties
+          })) || [],
+        // State can be serialized directly
+        state: JSON.parse(JSON.stringify(fiberData.state || {})),
+        // Context can contain functions - serialize safely
+        context: fiberData.context
+          ? JSON.parse(JSON.stringify(fiberData.context))
+          : {},
+        // Props might contain event handlers (functions) - serialize safely
+        props: fiberData.props
+          ? JSON.parse(JSON.stringify(fiberData.props))
+          : {},
+        // Simple values can be passed directly
+        renderCount: fiberData.renderCount || 0,
+        lastRenderTime: fiberData.lastRenderTime || Date.now(),
+      };
+    } catch (error) {
+      console.error('Error serializing fiber data:', error);
+      return {
+        hooks: [],
+        state: {},
+        context: {},
+        props: {},
+        renderCount: 0,
+        lastRenderTime: Date.now(),
+        error: 'Failed to serialize fiber data',
+      };
+    }
+  }
+
   private sendComponentSelectionToWidget(componentInfo: {
     componentName: string;
     componentType: Function;
@@ -570,21 +624,28 @@ class DebugOverlay {
       !this.debuggerWindow.closed &&
       this.debuggerWindowOrigin
     ) {
+      console.log('componentInfo: ', componentInfo);
+      console.log('fiberData: ', componentInfo.fiberData);
+
       try {
+        const payload = {
+          name: componentInfo.componentName,
+          sourceLocation: JSON.parse(
+            JSON.stringify(componentInfo.sourceLocation)
+          ),
+          boundingRect: {
+            x: componentInfo.boundingRect.x,
+            y: componentInfo.boundingRect.y,
+            width: componentInfo.boundingRect.width,
+            height: componentInfo.boundingRect.height,
+          },
+          fiberData: this.serializeFiberData(componentInfo.fiberData),
+        };
+
         this.debuggerWindow.postMessage(
           {
             type: 'SELECT_COMPONENT',
-            payload: {
-              name: componentInfo.componentName,
-              sourceLocation: componentInfo.sourceLocation,
-              boundingRect: {
-                x: componentInfo.boundingRect.x,
-                y: componentInfo.boundingRect.y,
-                width: componentInfo.boundingRect.width,
-                height: componentInfo.boundingRect.height,
-              },
-              fiberData: componentInfo.fiberData, // Include real fiber data
-            },
+            payload,
           },
           this.debuggerWindowOrigin
         );
@@ -830,9 +891,11 @@ class DebugOverlay {
       typeof window !== 'undefined' &&
       (window as any).FiberDataBridge
     ) {
-      return (window as any).FiberDataBridge.getComponentDataForBreakpoint(
-        breakpoint.id
-      );
+      const rawData = (
+        window as any
+      ).FiberDataBridge.getComponentDataForBreakpoint(breakpoint.id);
+      // Use the same serialization pattern for consistency
+      return this.serializeFiberData(rawData);
     }
     return null;
   }

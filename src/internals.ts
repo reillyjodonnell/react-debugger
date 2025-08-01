@@ -818,7 +818,16 @@ export function getAllBreakpointComponentData(): Record<string, any> {
     return {};
   }
 
-  return (window as any).FiberDataBridge.getAllBreakpointComponentData();
+  const rawData = (
+    window as any
+  ).FiberDataBridge.getAllBreakpointComponentData();
+  // Serialize all breakpoint data using the same pattern for consistency
+  return Object.fromEntries(
+    Object.entries(rawData).map(([key, value]) => [
+      key,
+      serializeFiberData(value),
+    ])
+  );
 }
 
 // Function to remove breakpoint association
@@ -968,6 +977,52 @@ function checkForComponentRenders(fiber: FiberNode | null) {
   }
 }
 
+// Function to serialize fiber data consistently across all postMessage calls
+function serializeFiberData(fiberData: any): any {
+  if (!fiberData) return null;
+
+  try {
+    return {
+      // Hooks have a circular reference - serialize safely
+      hooks:
+        fiberData.hooks?.map((hook: any, index: number) => ({
+          hookType: hook.hookType,
+          index: hook.index,
+          value: typeof hook.value === 'object' ? '[Object]' : hook.value,
+          deps:
+            hook.hookType === 'useEffect'
+              ? JSON.stringify(hook.value.deps)
+              : null,
+          // Don't include 'next', 'queue', or other complex properties
+        })) || [],
+      // State can be serialized directly
+      state: JSON.parse(JSON.stringify(fiberData.state || {})),
+      // Context can contain functions - serialize safely
+      context: fiberData.context
+        ? JSON.parse(JSON.stringify(fiberData.context))
+        : {},
+      // Props might contain event handlers (functions) - serialize safely
+      props: fiberData.props ? JSON.parse(JSON.stringify(fiberData.props)) : {},
+      // Simple values can be passed directly
+      renderCount: fiberData.renderCount || 0,
+      lastRenderTime: fiberData.lastRenderTime || Date.now(),
+      componentName: fiberData.componentName || 'Unknown',
+    };
+  } catch (error) {
+    console.error('Error serializing fiber data:', error);
+    return {
+      hooks: [],
+      state: {},
+      context: {},
+      props: {},
+      renderCount: 0,
+      lastRenderTime: Date.now(),
+      componentName: 'Unknown',
+      error: 'Failed to serialize fiber data',
+    };
+  }
+}
+
 // Function to send component data updates to debugger widget
 function sendComponentDataUpdateToDebugger(
   breakpointNumber: string,
@@ -990,8 +1045,9 @@ function sendComponentDataUpdateToDebugger(
     return;
   }
 
-  // Get the updated component data
-  const componentData = extractFiberData(fiber);
+  // Get the updated component data and serialize it consistently
+  const rawComponentData = extractFiberData(fiber);
+  const componentData = serializeFiberData(rawComponentData);
 
   // Send the update to the debugger widget
   try {

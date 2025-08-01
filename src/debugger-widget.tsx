@@ -1366,7 +1366,8 @@ const DebuggerOverlayComponent: React.FC<{
                           {state.capturedData.renderCount}
                         </span>
                       </div>
-                      <div>
+                      {/* not super useful atm */}
+                      {/* <div>
                         <span style={{ color: 'rgba(255, 165, 0, 0.9)' }}>
                           Last Render
                         </span>
@@ -1378,7 +1379,7 @@ const DebuggerOverlayComponent: React.FC<{
                             state.capturedData.lastRenderTime
                           ).toLocaleTimeString()}
                         </span>
-                      </div>
+                      </div> */}
                     </div>
                   </div>
                 </>
