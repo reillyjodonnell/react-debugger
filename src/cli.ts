@@ -11,7 +11,7 @@ async function main() {
   console.log('🚀 Starting React Debugger...');
 
   // 2. Start debugger server in background
-  const server = spawn('bun', ['run', 'dist/debugger-server.js'], {
+  const server = spawn('bun', [__dirname + '/debugger-server.js'], {
     stdio: 'inherit',
     detached: true,
   });
