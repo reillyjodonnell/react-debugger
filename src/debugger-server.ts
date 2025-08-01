@@ -1,14 +1,5 @@
 import { serve } from 'bun';
 
-// Build the debugger widget when server starts
-await Bun.build({
-  entrypoints: ['src/debugger-widget.tsx'],
-  outdir: './dist',
-  format: 'esm',
-  target: 'browser',
-  external: [],
-});
-
 const server = serve({
   port: 5679,
   fetch(req, server) {

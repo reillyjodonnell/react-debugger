@@ -10,9 +10,6 @@ const targetUrl = process.argv[2] || 'localhost:3000';
 async function main() {
   console.log('🚀 Starting React Debugger...');
 
-  // 1. Build the debugger client (if needed)
-  await execAsync('bun run build');
-
   // 2. Start debugger server in background
   const server = spawn('bun', ['run', 'dist/debugger-server.js'], {
     stdio: 'inherit',

@@ -22,7 +22,6 @@ npx react-debugger-core localhost:3000
 
 - Hover components to highlight them
 - Click components to inspect props/state/hooks
-- Press `Ctrl+Shift+D` to toggle debugger
 
 ## What you get
 
