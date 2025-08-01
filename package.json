@@ -1,6 +1,6 @@
 {
   "name": "@react-debugger/core",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "A Chrome DevTools Protocol-based debugger for React applications",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -12,10 +12,11 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "bin": {
-    "react-debugger-core": "dist/cli.js"
+    "react-debugger-core": "bin/cli.js"
   },
   "scripts": {
     "build": "bun build src/index.tsx --outdir dist --target browser && bun build src/cli.ts --outdir dist --target node && bun build src/debugger-server.ts --outdir dist --target bun && bun build src/debugger-widget.tsx --outdir dist --target browser",

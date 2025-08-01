@@ -1,4 +1,8 @@
-import { serve } from 'bun';
+import { fileURLToPath, serve } from 'bun';
+import path from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const server = serve({
   port: 5679,
@@ -99,16 +103,19 @@ const server = serve({
       });
     }
 
-    // Serve the built debugger widget JavaScript
     if (url.pathname === '/debugger-widget.js') {
-      return new Response(Bun.file('dist/debugger-widget.js'), {
-        headers: {
-          'Content-Type': 'application/javascript',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-        },
-      });
+      // Look for the file in the SAME directory as this server file
+      return new Response(
+        Bun.file(path.join(__dirname, 'debugger-widget.js')),
+        {
+          headers: {
+            'Content-Type': 'application/javascript',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+          },
+        }
+      );
     }
 
     // Fallback for old path

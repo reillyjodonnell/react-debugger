@@ -15,7 +15,7 @@ Visual React debugging with component inspection and breakpoints.
 **2. Start the debugger:**
 
 ```bash
-npx react-debugger-core localhost:3000
+npx @react-debugger/core localhost:3000
 ```
 
 **3. Debug:**
