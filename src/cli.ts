@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { spawn, exec } from 'child_process';
 import { existsSync } from 'fs';
 import { promisify } from 'util';
