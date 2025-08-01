@@ -15,7 +15,7 @@
     "dist"
   ],
   "bin": {
-    "@react-debugger/core": "dist/cli.js"
+    "react-debugger-core": "dist/cli.js"
   },
   "scripts": {
     "build": "bun build src/index.tsx --outdir dist --target browser && bun build src/cli.ts --outdir dist --target node && bun build src/debugger-server.ts --outdir dist --target bun",
