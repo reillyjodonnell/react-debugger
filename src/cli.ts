@@ -3,6 +3,12 @@
 import { spawn, exec } from 'child_process';
 import { existsSync } from 'fs';
 import { promisify } from 'util';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+// Get the directory of this script at runtime
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const execAsync = promisify(exec);
 const targetUrl = process.argv[2] || 'localhost:3000';
