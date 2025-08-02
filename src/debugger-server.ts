@@ -3,6 +3,7 @@ import path from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const targetPort = process.argv[2] || '3000';
 
 const server = serve({
   port: 5679,
@@ -89,6 +90,9 @@ const server = serve({
 </head>
 <body>
     <div id="root"></div>
+    <script>
+        window.REACT_DEBUGGER_TARGET_PORT = '${targetPort}';
+    </script>
     <script type="module" src="/debugger-widget.js"></script>
 </body>
 </html>`;

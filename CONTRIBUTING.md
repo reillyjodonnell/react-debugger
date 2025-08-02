@@ -36,6 +36,7 @@ bun run build
    ```
 
 5. **Open the example app:**
+
    ```bash
    cd example && bun run dev
    ```
@@ -68,27 +69,30 @@ This simulates the real-world usage experience and tests the complete package wo
 
    ```bash
    sudo npm install -g ./react-debugger-core-0.0.7.tgz
+   # the version needs to be whatever version the above just created
    ```
 
 4. **Test in your React project:**
 
    ```bash
    cd /path/to/your/react/project
-   
-   # Add the script tag to your HTML (if using unpkg)
-   # <script src="//unpkg.com/@react-debugger/core/dist/index.js"></script>
-   
-   # OR for local testing, serve the built files
+
+   # add this to html
    # <script src="http://localhost:8080/index.js"></script>
-   
-   # Start your React dev server (in one terminal)
+
+   # start http server for files
+   bunx serve dist --cors -p 8080
+
+   # Start your React app
    npm run dev  # or yarn dev, usually runs on localhost:3000 or localhost:5173
-   
+
+
    # In another terminal, start the debugger
    npx @react-debugger/core localhost:3000  # or your app's port (e.g., localhost:5173)
    ```
 
 5. **What should happen:**
+
    - Chrome opens with debugging flags enabled
    - The debugger window opens at `http://127.0.0.1:5679/debugger`
    - You should see "Debugger widget initialized" in the logs
@@ -105,7 +109,7 @@ This simulates the real-world usage experience and tests the complete package wo
 ### Important Notes for Local Testing
 
 - **Path Resolution Fix**: The CLI uses runtime path resolution to find the debugger server and widget files. This was a critical fix to make the global installation work correctly.
-- **Port Requirements**: 
+- **Port Requirements**:
   - Your React app runs on its port (usually 3000 or 5173)
   - Debugger server runs on port 5679
   - Chrome debugging runs on port 9222
@@ -140,7 +144,7 @@ For testing how the package works when published to npm:
 
 4. **Verify the complete workflow:**
    - Overlay script loads and initializes
-   - Debugger server starts and serves widget correctly  
+   - Debugger server starts and serves widget correctly
    - WebSocket proxy connects to Chrome DevTools Protocol
    - React components are tracked and breakpoints work
    - Component inspection and highlighting functions properly
@@ -159,17 +163,21 @@ For testing how the package works when published to npm:
 ## Troubleshooting Common Issues
 
 ### "debugger-widget.js not found" Error
+
 This usually means:
+
 1. The project wasn't built (`bun run build`)
 2. You're running from source instead of the global installation
 3. Path resolution is broken (should be fixed in v0.0.7+)
 
 ### Debugger Window Won't Open
+
 1. Check if popup blockers are enabled
 2. Verify the debugger server is running on port 5679
 3. Try opening `http://127.0.0.1:5679/debugger` manually
 
 ### No Component Highlighting
+
 1. Ensure the overlay script is loaded in your React app
 2. Check that React DevTools hooks are available
 3. Verify WebSocket connection is established

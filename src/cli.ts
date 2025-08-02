@@ -16,8 +16,11 @@ const targetUrl = process.argv[2] || 'localhost:3000';
 async function main() {
   console.log('🚀 Starting React Debugger...');
 
-  // 2. Start debugger server in background
-  const server = spawn('bun', [__dirname + '/debugger-server.js'], {
+  // Extract port from target URL
+  const port = targetUrl.includes(':') ? targetUrl.split(':')[1] : '3000';
+
+  // 2. Start debugger server in background with target port
+  const server = spawn('bun', [__dirname + '/debugger-server.js', port], {
     stdio: 'inherit',
     detached: true,
   });

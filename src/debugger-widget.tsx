@@ -10,6 +10,12 @@ import {
   Target,
 } from 'lucide-react';
 
+declare global {
+  interface Window {
+    REACT_DEBUGGER_TARGET_PORT?: string;
+  }
+}
+
 export interface DebuggerState {
   isOpen: boolean;
   isPaused: boolean;
@@ -1511,16 +1517,17 @@ export function DebuggerWidget() {
       console.log('Available targets:', targets);
 
       // Look for your app page
+      const targetPort = window.REACT_DEBUGGER_TARGET_PORT || '5173';
       const page = targets.find((t: any) => {
         const isPage = t.type === 'page';
-        const hasLocalhost = t.url && t.url.includes('localhost:5173');
+        const hasLocalhost = t.url && t.url.includes(`localhost:${targetPort}`);
         return isPage && hasLocalhost;
       });
 
       if (!page) {
         addLog(
           'error',
-          'No page target found for localhost:5173. Make sure Chrome is open to the app.'
+          `No page target found for localhost:${targetPort}. Make sure Chrome is open to the app.`
         );
         return;
       }
