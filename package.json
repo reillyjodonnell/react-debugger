@@ -1,6 +1,6 @@
 {
   "name": "@react-debugger/core",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "A Chrome DevTools Protocol-based debugger for React applications",
   "main": "dist/index.js",
   "module": "dist/index.js",
