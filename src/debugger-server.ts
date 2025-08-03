@@ -159,7 +159,6 @@ const server = serve({
           });
 
           cdpWs.addEventListener('message', (event) => {
-            console.log('CDP message received:', event.data);
             // Forward CDP messages to the client
             ws.send(event.data);
           });
@@ -182,18 +181,9 @@ const server = serve({
         } else {
           // Forward other messages to CDP
           const cdpWs = (ws as any).cdpConnection;
-          console.log(
-            'Forwarding message to CDP, connection state:',
-            cdpWs?.readyState
-          );
           if (cdpWs && cdpWs.readyState === WebSocket.OPEN) {
-            console.log('Sending to CDP:', message);
             cdpWs.send(message);
           } else {
-            console.error(
-              'CDP WebSocket not connected, readyState:',
-              cdpWs?.readyState
-            );
             ws.send(
               JSON.stringify({
                 type: 'CDP_ERROR',

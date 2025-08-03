@@ -215,9 +215,6 @@ if (typeof window !== 'undefined') {
     getRenderCount: (breakpointNumber: string): number => {
       const entry = BreakpointFiberMap.get(breakpointNumber);
       const count = entry ? entry.renderCount : 0;
-      console.log(
-        `Getting render count for breakpoint ${breakpointNumber}: ${count}`
-      );
       return count;
     },
 
@@ -226,13 +223,6 @@ if (typeof window !== 'undefined') {
       const entry = BreakpointFiberMap.get(breakpointNumber);
       if (entry) {
         entry.renderCount += 1;
-        console.log(
-          `Incremented render count for breakpoint ${breakpointNumber}: ${entry.renderCount}`
-        );
-      } else {
-        console.warn(
-          `No entry found for breakpoint ${breakpointNumber} when trying to increment render count`
-        );
       }
     },
 
@@ -292,6 +282,73 @@ function traverseFiber(fiber: FiberNode | null, isRoot = false) {
   }
 }
 
+// Combined traversal function - does both mapping and breakpoint checking in single pass
+function combinedTraverseFiber(
+  fiber: FiberNode | null,
+  isRoot = false,
+  checkBreakpoints = false
+) {
+  if (!fiber) return;
+
+  if (isRoot) {
+    if (fiber.child)
+      combinedTraverseFiber(fiber.child, false, checkBreakpoints);
+    return;
+  }
+
+  // Part 1: Do the original traverseFiber work (populate maps)
+  if (fiber.stateNode instanceof HTMLElement) {
+    HTMLMap.set(fiber.stateNode, fiber);
+    if (fiber.flags === Update) {
+      highlightRenderForElement(fiber.stateNode);
+    }
+  }
+
+  if (typeof fiber.elementType === 'function') {
+    ComponentMap.set(fiber, fiber.elementType);
+  }
+
+  // Part 2: Do the checkForComponentRenders work (only if we have breakpoints)
+  if (checkBreakpoints) {
+    // Check if this fiber performed work (rendered/re-rendered)
+    const performedWork = (fiber.flags & PerformedWork) !== 0;
+    const hasPropsUpdate = fiber.pendingProps !== fiber.memoizedProps;
+    const hasStateUpdate = fiber.updateQueue !== null;
+
+    // If this fiber performed work, check if it's being tracked
+    if (performedWork || hasPropsUpdate || hasStateUpdate) {
+      if (typeof fiber.type === 'function') {
+        // Check if this component is being tracked by any breakpoint
+        // Move the breakpoint check here instead of calling getAllBreakpointFibers for every fiber
+        for (const [breakpointNumber, entry] of BreakpointFiberMap.entries()) {
+          if (typeof entry.fiber.type === 'function') {
+            const componentMatch =
+              fiber.type === entry.fiber.type ||
+              fiber.type.name === entry.fiber.type.name;
+
+            if (componentMatch) {
+              // Increment render count
+              entry.renderCount += 1;
+
+              // Send updated component data to debugger widget
+              sendComponentDataUpdateToDebugger(breakpointNumber, fiber);
+              break; // Found match, no need to check other breakpoints
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Continue traversal
+  if (fiber.sibling) {
+    combinedTraverseFiber(fiber.sibling, false, checkBreakpoints);
+  }
+  if (fiber.child) {
+    combinedTraverseFiber(fiber.child, false, checkBreakpoints);
+  }
+}
+
 // Component source location cache
 const ComponentSourceMap = new Map<
   Function,
@@ -322,12 +379,11 @@ const originalOnCommitFiberRoot = (window.__REACT_DEVTOOLS_GLOBAL_HOOK__ as any)
   priorityLevel: any,
   ...rest: any[]
 ) {
-  console.log('onCommitFiberRoot called - tracking renders');
+  // Early exit if no breakpoints are set
+  const hasBreakpoints = BreakpointFiberMap.size > 0;
 
-  traverseFiber(root.current, true);
-
-  // Check for component renders in the fiber tree
-  checkForComponentRenders(root.current);
+  // Single traversal that combines both operations
+  combinedTraverseFiber(root.current, true, hasBreakpoints);
 
   // Set the current root fiber for data extraction
   if (typeof window !== 'undefined' && (window as any).FiberDataBridge) {
@@ -907,118 +963,79 @@ declare global {
   }
 }
 
-// Function to check for component renders in the fiber tree
-function checkForComponentRenders(fiber: FiberNode | null) {
-  if (!fiber) return;
-
-  // Check if this fiber performed work (rendered/re-rendered)
-  const performedWork = (fiber.flags & PerformedWork) !== 0;
-  const hasPropsUpdate = fiber.pendingProps !== fiber.memoizedProps;
-  const hasStateUpdate = fiber.updateQueue !== null;
-
-  // If this fiber performed work, check if it's being tracked
-  if (performedWork || hasPropsUpdate || hasStateUpdate) {
-    console.log(
-      `Component ${
-        typeof fiber.type === 'function' && fiber.type.name
-      } rendered - performedWork: ${performedWork}, hasPropsUpdate: ${hasPropsUpdate}, hasStateUpdate: ${hasStateUpdate}`
-    );
-    if (typeof window !== 'undefined' && (window as any).FiberDataBridge) {
-      const bridge = (window as any).FiberDataBridge;
-      const breakpointFibers = bridge.getAllBreakpointFibers();
-
-      // Check if this fiber is being tracked by any breakpoint
-      console.log(
-        `Checking ${breakpointFibers.size} breakpoints for component ${
-          typeof fiber.type === 'function' ? fiber.type.name : 'unknown'
-        }`
-      );
-
-      for (const [
-        breakpointNumber,
-        breakpointFiber,
-      ] of breakpointFibers.entries()) {
-        // Compare by component type/name instead of fiber instance
-        if (
-          typeof fiber.type === 'function' &&
-          typeof breakpointFiber.type === 'function'
-        ) {
-          const componentMatch =
-            fiber.type === breakpointFiber.type ||
-            fiber.type.name === breakpointFiber.type.name;
-          console.log(
-            `Comparing ${fiber.type.name} with ${breakpointFiber.type.name}: ${componentMatch}`
-          );
-
-          if (componentMatch) {
-            bridge.incrementRenderCount(breakpointNumber);
-            console.log(
-              `Component render detected for breakpoint ${breakpointNumber}: ${getComponentName(
-                fiber
-              )}`
-            );
-
-            // Send updated component data to debugger widget
-            sendComponentDataUpdateToDebugger(breakpointNumber, fiber);
-
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  // Recursively check children and siblings
-  if (fiber.child) {
-    checkForComponentRenders(fiber.child);
-  }
-  if (fiber.sibling) {
-    checkForComponentRenders(fiber.sibling);
-  }
-}
-
 // Function to serialize fiber data consistently across all postMessage calls
 function serializeFiberData(fiberData: any): any {
   if (!fiberData) return null;
 
+  // Ultra-simple serialization - only what the debugger UI actually shows
+  const serializeValue = (value: any): any => {
+    // Primitives pass through
+    if (value === null || value === undefined) return value;
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      return value;
+    }
+
+    // Functions and DOM elements become strings
+    if (typeof value === 'function')
+      return `[Function: ${value.name || 'anonymous'}]`;
+    if (value instanceof HTMLElement) return `[HTMLElement: ${value.tagName}]`;
+
+    // Arrays - just show first few items
+    if (Array.isArray(value)) {
+      return value.length > 3
+        ? `[Array(${value.length})]`
+        : value.map(serializeValue);
+    }
+
+    // Objects - flatten to simple key-value display
+    if (typeof value === 'object') {
+      return '[Object]'; // Keep it simple - debugger shows "[Object]" in UI
+    }
+
+    return String(value);
+  };
+
   try {
     return {
-      // Hooks have a circular reference - serialize safely
-      hooks:
-        fiberData.hooks?.map((hook: any, index: number) => ({
-          hookType: hook.hookType,
-          index: hook.index,
-          value: typeof hook.value === 'object' ? '[Object]' : hook.value,
-          deps:
-            hook.hookType === 'useEffect'
-              ? JSON.stringify(hook.value.deps)
-              : null,
-          // Don't include 'next', 'queue', or other complex properties
-        })) || [],
-      // State can be serialized directly
-      state: JSON.parse(JSON.stringify(fiberData.state || {})),
-      // Context can contain functions - serialize safely
-      context: fiberData.context
-        ? JSON.parse(JSON.stringify(fiberData.context))
-        : {},
-      // Props might contain event handlers (functions) - serialize safely
-      props: fiberData.props ? JSON.parse(JSON.stringify(fiberData.props)) : {},
-      // Simple values can be passed directly
-      renderCount: fiberData.renderCount || 0,
-      lastRenderTime: fiberData.lastRenderTime || Date.now(),
+      // Component name for display
       componentName: fiberData.componentName || 'Unknown',
+
+      // Render count (main metric we track)
+      renderCount: fiberData.renderCount || 0,
+
+      // Props with their current values (widget checks Object.keys(props).length > 0)
+      props: Object.fromEntries(
+        Object.entries(fiberData.props || {})
+          .slice(0, 10) // Limit props shown
+          .map(([key, value]) => [key, serializeValue(value)])
+      ),
+
+      // Hooks with their current values (widget maps over hooks array)
+      hooks: (fiberData.hooks || []).map((hook: any, index: number) => ({
+        type: hook.hookType || 'unknown',
+        hookType: hook.hookType || 'unknown', // Widget checks both hook.hookType || hook.type
+        value: serializeValue(hook.value),
+      })),
+
+      // Context data (widget checks Object.keys(context).length > 0)
+      context: Object.fromEntries(
+        Object.entries(fiberData.context || {})
+          .slice(0, 10) // Limit context shown
+          .map(([key, value]) => [key, serializeValue(value)])
+      ),
     };
   } catch (error) {
-    console.error('Error serializing fiber data:', error);
     return {
-      hooks: [],
-      state: {},
-      context: {},
-      props: {},
-      renderCount: 0,
-      lastRenderTime: Date.now(),
       componentName: 'Unknown',
-      error: 'Failed to serialize fiber data',
+      renderCount: 0,
+      props: {},
+      hooks: [],
+      context: {},
+      error: 'Failed to serialize',
     };
   }
 }
@@ -1032,17 +1049,9 @@ function sendComponentDataUpdateToDebugger(
 
   // Check if there's a debugger window to send data to
   const debuggerWindow = (window as any).__reactDebuggerOverlay?.debuggerWindow;
-  console.log('Debugger window state:', {
-    exists: !!debuggerWindow,
-    closed: debuggerWindow?.closed,
-    origin: (window as any).__reactDebuggerOverlay?.debuggerWindowOrigin,
-  });
 
   if (!debuggerWindow || debuggerWindow.closed) {
-    console.log(
-      'Debugger window not available for sending component data update'
-    );
-    return;
+    return; // Early exit - no point in expensive serialization
   }
 
   // Get the updated component data and serialize it consistently
@@ -1061,11 +1070,6 @@ function sendComponentDataUpdateToDebugger(
         },
       },
       (window as any).__reactDebuggerOverlay?.debuggerWindowOrigin || '*'
-    );
-
-    console.log(
-      `Sent component data update for breakpoint ${breakpointNumber} to debugger widget:`,
-      componentData
     );
   } catch (error) {
     console.error('Error sending component data update:', error);

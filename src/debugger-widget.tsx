@@ -299,13 +299,14 @@ const DebuggerOverlayComponent: React.FC<{
     <div
       data-debugger-widget
       style={{
-        width: showInspector ? '720px' : '420px',
+        width: '100%',
+        height: '100%',
         background: 'rgba(15, 15, 15, 0.98)',
+        boxSizing: 'border-box',
         color: 'rgb(255, 255, 255)',
         fontFamily:
           "'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace",
         fontSize: '12px',
-        borderRadius: '8px',
         zIndex: 999999,
         display: 'flex',
         flexDirection: 'row',
@@ -484,12 +485,6 @@ const DebuggerOverlayComponent: React.FC<{
           >
             Breakpoints ({state.breakpoints.length}){' '}
             {state.sections.breakpoints ? '▼' : '▶'}
-          </button>
-          <button
-            onClick={() => toggleSection('components')}
-            style={state.sections.components ? activeButtonStyle : buttonStyle}
-          >
-            Tree {state.sections.components ? '▼' : '▶'}
           </button>
         </div>
 
@@ -857,7 +852,7 @@ const DebuggerOverlayComponent: React.FC<{
       {showInspector && (
         <div
           style={{
-            width: '300px',
+            width: '100%',
             background: 'rgba(10, 10, 10, 0.95)',
             display: 'flex',
             flexDirection: 'column',
@@ -918,7 +913,14 @@ const DebuggerOverlayComponent: React.FC<{
           <div
             style={{ flex: '1 1 0%', overflowY: 'auto', padding: '12px 16px' }}
           >
-            <div style={{ fontSize: '11px', lineHeight: '1.4' }}>
+            <div
+              style={{
+                fontSize: '11px',
+                lineHeight: '1.4',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
               {/* Debug Controls - when paused */}
               {state.isPaused && (
                 <div style={{ marginBottom: '20px' }}>
@@ -1183,7 +1185,13 @@ const DebuggerOverlayComponent: React.FC<{
               {state.capturedData ? (
                 <>
                   {/* Hooks - Always show if we have captured data */}
-                  <div style={{ marginBottom: '16px' }}>
+                  <div
+                    style={{
+                      marginBottom: '16px',
+                      maxHeight: '300px',
+                      overflowY: 'auto',
+                    }}
+                  >
                     <div
                       style={{
                         fontWeight: '600',
@@ -1276,7 +1284,14 @@ const DebuggerOverlayComponent: React.FC<{
                       >
                         {Object.entries(state.capturedData.props).map(
                           ([key, value]) => (
-                            <div key={key} style={{ marginBottom: '4px' }}>
+                            <div
+                              key={key}
+                              style={{
+                                marginBottom: '4px',
+                                textOverflow: 'ellipsis',
+                                overflow: 'hidden',
+                              }}
+                            >
                               <span style={{ color: 'rgba(255, 165, 0, 0.9)' }}>
                                 {key}
                               </span>
