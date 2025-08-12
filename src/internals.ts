@@ -100,6 +100,8 @@ const BreakpointFiberMap = new Map<
   { fiber: FiberNode; renderCount: number }
 >();
 
+// Legacy MCP-internals WebSocket and track-by-id removed; MCP agent handles comms.
+
 // Global bridge for accessing fiber data from debugger widget
 if (typeof window !== 'undefined') {
   (window as any).FiberDataBridge = {
@@ -340,6 +342,8 @@ function combinedTraverseFiber(
     }
   }
 
+  // Part 3: Legacy MCP-tracked components removed; agent handles streaming.
+
   // Continue traversal
   if (fiber.sibling) {
     combinedTraverseFiber(fiber.sibling, false, checkBreakpoints);
@@ -379,8 +383,9 @@ const originalOnCommitFiberRoot = (window.__REACT_DEVTOOLS_GLOBAL_HOOK__ as any)
   priorityLevel: any,
   ...rest: any[]
 ) {
-  // Early exit if no breakpoints are set
+  // Check if we need to do additional work
   const hasBreakpoints = BreakpointFiberMap.size > 0;
+  const hasMcpTracking = false;
 
   // Single traversal that combines both operations
   combinedTraverseFiber(root.current, true, hasBreakpoints);
@@ -1075,3 +1080,6 @@ function sendComponentDataUpdateToDebugger(
     console.error('Error sending component data update:', error);
   }
 }
+
+// Function to send component data updates to MCP server via WebSocket
+// Legacy send-to-MCP removed; agent owns network path.
