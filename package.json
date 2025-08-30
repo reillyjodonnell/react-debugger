@@ -1,7 +1,7 @@
 {
   "name": "@react-debugger/core",
-  "version": "0.0.10",
-  "description": "React debugger for humans and AI agents - inspect components, set breakpoints, and understand React internals programmatically",
+  "version": "0.0.9",
+  "description": "A Chrome DevTools Protocol-based debugger for React applications",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -9,9 +9,6 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    },
-    "./react-bridge-client": {
-      "import": "./dist/react-bridge-client.js"
     }
   },
   "files": [
@@ -22,11 +19,10 @@
     "react-debugger-core": "bin/cli.js"
   },
   "scripts": {
-    "build": "bun build src/index.tsx --outdir dist --target browser       && bun build src/cli.ts --outdir dist --target node       && bun build src/debugger-server.ts --outdir dist --target bun       && bun build src/mcp-server.ts --outdir dist --target bun       && bun build src/debugger-widget.tsx --outdir dist --target browser       && bun build src/react-bridge-client.ts --outdir dist --outfile dist/react-bridge-client.js --target browser       && mkdir -p dist/templates && cp src/templates/mcp.json dist/templates/mcp.json",
+    "build": "bun build src/index.tsx --outdir dist --target browser && bun build src/cli.ts --outdir dist --target node && bun build src/debugger-server.ts --outdir dist --target bun && bun build src/debugger-widget.tsx --outdir dist --target browser",
     "dev": "bun --watch src/index.tsx",
     "chrome": "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug http://localhost:5173",
-    "prepublishOnly": "bun run build",
-    "local": "bun run build && npm pack && sudo npm i -g ./$(npm pack | tail -1) && bunx serve dist --cors -p 8080"
+    "prepublishOnly": "bun run build"
   },
   "keywords": [
     "react",
