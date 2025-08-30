@@ -187,3 +187,12 @@ This usually means:
 ```bash
 npm publish --access public
 ```
+
+## AGENT MODE
+
+`bun run local`
+`npx @modelcontextprotocol/inspector bun ./src/cli.ts --mcp-server`
+In MCP Inspector
+Command: bun
+Arguments: ./src/cli.ts --mcp-server
+// rest empty

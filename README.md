@@ -1,41 +1,34 @@
 # React Debugger
 
-Visual React debugging with component inspection and breakpoints.
+Supercharge agents with React runtime values.
 
-> ⚠️ **Alpha Release** - Thanks for checking this out! We're excited to make this the best damn debugger experience for humans and agents alike :)
+> ⚠️ Alpha. APIs subject to change.
 
-## Usage
+## Get started
 
-**1. Add to your React app:**
-
-```html
-<script src="//unpkg.com/@react-debugger/core/dist/index.js"></script>
-```
-
-**2. Start the debugger:**
-
-```bash
-npx @react-debugger/core localhost:3000
-```
-
-**3. Debug:**
-
-- Hover components to highlight them
-- Click components to inspect props/state/hooks
+`npx @react-debugger/core init`
+`npx @react-debugger/core mxp`
 
 ## What you get
 
-- Visual component highlighting and inspection
-- Real-time props, state, and hooks data
-- Component source location tracing
-- Breakpoints and execution control
-- Works with any React app, zero config
+- Visual component highlight and inspection
+- Commit-level diffs with why reasons (props/hooks/context)
+- Deref RPCs for props and hooks previews
+- Findings channel with low-noise heuristics
 
 ## Requirements
 
+- Node 18+, Bun 1.0+ (for building)
 - React 16.8+
-- Chrome (for debugging)
+- Chrome (for visual mode)
 
 ---
 
 MIT License
+
+```
+
+`npx react-debugger init` // for cursor: writes rules, mcp.json; for claude code writes terminal command
+`npx react-debugger mcp` // starts local mcp server for agent to detect
+
+```

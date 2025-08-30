@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "react-debugger": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "react-debugger",
+        "mcp",
+        "--port",
+        "5679"
+      ]
+    }
+  }
+}
