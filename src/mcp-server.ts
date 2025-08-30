@@ -24,7 +24,6 @@ interface McpResponse {
 class ReactMcpServer {
   // Legacy tracking removed in favor of subscribe/deref channels
   private webSocketClients = new Set<any>();
-  private server: any;
   private wsPort: number;
   // Buffer for STDIO header-based framing (Content-Length)
   private stdinBuffer: Buffer = Buffer.alloc(0);
@@ -323,7 +322,6 @@ class ReactMcpServer {
       },
     });
 
-    this.server = server;
     console.log(`WebSocket server running on port ${this.wsPort}`);
   }
 

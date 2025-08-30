@@ -1,3 +1,4 @@
+
 ---
 description: 'Enforce diagnostic-first workflow using React Debugger MCP'
 globs:

@@ -22,7 +22,7 @@
     "react-debugger-core": "bin/cli.js"
   },
   "scripts": {
-    "build": "bun build src/index.tsx --outdir dist --target browser && bun build src/cli.ts --outdir dist --target node && bun build src/debugger-server.ts --outdir dist --target bun && bun build src/mcp-server.ts --outdir dist --target bun && bun build src/debugger-widget.tsx --outdir dist --target browser && bun build src/react-bridge-client.ts --outdir dist --outfile dist/react-bridge-client.js --target browser",
+    "build": "bun build src/index.tsx --outdir dist --target browser       && bun build src/cli.ts --outdir dist --target node       && bun build src/debugger-server.ts --outdir dist --target bun       && bun build src/mcp-server.ts --outdir dist --target bun       && bun build src/debugger-widget.tsx --outdir dist --target browser       && bun build src/react-bridge-client.ts --outdir dist --outfile dist/react-bridge-client.js --target browser       && mkdir -p dist/templates && cp src/templates/mcp.json dist/templates/mcp.json",
     "dev": "bun --watch src/index.tsx",
     "chrome": "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug http://localhost:5173",
     "prepublishOnly": "bun run build",
