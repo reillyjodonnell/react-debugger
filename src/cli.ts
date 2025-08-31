@@ -119,7 +119,7 @@ async function runInit() {
   mkdirp(cursorDir);
   const rulesDir = path.join(cursorDir, 'rules');
   mkdirp(rulesDir);
-  const rulePath = path.join(rulesDir, 'react-debugger.md');
+  const rulePath = path.join(rulesDir, 'react-debugger.mdc');
   writeIfAbsent(rulePath, cursorRuleMarkdown());
   console.log(`  ✔ Ensured Cursor rule ${rel(rulePath)}`);
 
@@ -175,7 +175,7 @@ async function runInit() {
   // Summarize succinctly
   const added: string[] = [];
   // Cursor rule always added/ensured
-  added.push('.cursor/rules/react-debugger.md');
+  added.push('.cursor/rules/react-debugger.mdc');
 
   // mcp.json targets
   const targets = findMcpTargetsInProject(cwd);
@@ -679,7 +679,7 @@ async function runHelpInteractive() {
     case 2:
       console.log(`${ANSI.bold}Cursor rules / diagnostics${ANSI.reset}`);
       console.log(
-        '• Ensure `.cursor/rules/react-debugger.md` exists (init creates it).'
+        '• Ensure `.cursor/rules/react-debugger.mdc` exists (init creates it).'
       );
       console.log(
         '• Cursor may require you to enable MCP tools in Settings → MCP & Integrations → MCP Tools.'

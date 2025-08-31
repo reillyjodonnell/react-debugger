@@ -14,10 +14,37 @@
       "tools": [
         {
           "name": "subscribe",
-          "description": "Subscribe to component changes",
+          "description": "Subscribe to channels with selector, projection and budgets",
           "inputSchema": {
             "type": "object",
             "properties": {
+              "channels": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Channels to subscribe to",
+                "default": ["commit", "findings"]
+              },
+              "selector": {
+                "type": "object",
+                "description": "Filter to select matching fibers/components",
+                "properties": {
+                  "displayName": {
+                    "type": "string",
+                    "description": "Exact or regex pattern (string form)"
+                  },
+                  "file": {
+                    "type": "string",
+                    "description": "File path (exact or regex string)"
+                  },
+                  "pathContains": { "type": "string" },
+                  "keyEquals": { "type": "string" },
+                  "costMsGte": { "type": "number" },
+                  "propsMatch": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              },
               "fields": {
                 "type": "object",
                 "description": "Projection for props/state/context in snapshots.",
@@ -38,6 +65,43 @@
                     "description": "Context keys to include (by display name). Use [\"*\"] for all."
                   }
                 }
+              },
+              "priority": {
+                "type": "string",
+                "enum": ["high", "normal", "low"],
+                "default": "normal"
+              },
+              "budgets": {
+                "type": "object",
+                "properties": {
+                  "bandwidthKBs": { "type": "number" },
+                  "msgPerSec": { "type": "number" }
+                }
+              },
+              "timeoutMs": {
+                "type": "number",
+                "description": "Max time to wait for first snapshot (50-1500ms). Default 250."
+              }
+            }
+          },
+          "outputSchema": {
+            "type": "object",
+            "properties": {
+              "subscriptionId": { "type": "string" },
+              "channels": { "type": "array", "items": { "type": "string" } },
+              "selector": { "type": "object" },
+              "targets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "fid": { "type": "string" },
+                    "displayName": { "type": "string" },
+                    "path": { "type": "string" },
+                    "key": { "type": "string" },
+                    "source": { "type": "string" }
+                  }
+                }
               }
             }
           }
@@ -52,10 +116,16 @@
               "subscriptionId": { "type": "string" },
               "max": {
                 "type": "number",
-                "description": "Max events to drain (default 100)"
+                "description": "Max events to drain (default 50)"
               }
             },
             "required": ["subscriptionId"]
+          },
+          "outputSchema": {
+            "type": "object",
+            "properties": {
+              "events": { "type": "array", "items": { "type": "object" } }
+            }
           }
         },
         {
@@ -105,12 +175,6 @@
             },
             "required": ["fid", "paths"]
           }
-        },
-        {
-          "name": "ping",
-          "title": "Health check",
-          "description": "Basic health check for the MCP server",
-          "inputSchema": { "type": "object", "properties": {} }
         }
       ],
       "requirements": {

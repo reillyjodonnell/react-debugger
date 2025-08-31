@@ -568,6 +568,19 @@ class MCPDebuggerAgent {
     }
     if (t === 'object') {
       // Redaction support via window.REACT_DEBUGGER_REDACT
+      // Only enumerate truly plain objects. Exotic objects (Proxies,
+      // Next.js dynamic API wrappers, DOM wrappers, etc.) may throw or
+      // emit runtime warnings when inspected; summarize them instead of
+      // iterating their keys.
+      if (!this.isPlainObject(value)) {
+        try {
+          const name =
+            value && value.constructor ? value.constructor.name : 'Object';
+          return `[${name}]`;
+        } catch (e) {
+          return '[Object]';
+        }
+      }
       const result: any = {};
       let count = 0;
       for (const k of Object.keys(value)) {
@@ -660,7 +673,10 @@ class MCPDebuggerAgent {
   }
 
   private isPlainObject(v: any): v is Record<string, any> {
-    return v !== null && typeof v === 'object' && !Array.isArray(v);
+    // Consider only null-prototype or Object.prototype objects as plain.
+    if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
+    const proto = Object.getPrototypeOf(v);
+    return proto === Object.prototype || proto === null;
   }
 
   private diffObject(
