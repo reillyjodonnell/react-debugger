@@ -116,12 +116,7 @@
       "requirements": {
         "runtime": "bun",
         "minimumVersion": "1.0.0",
-        "dependencies": ["react"],
-        "setup": [
-          "1) Install locally via npm pack + npm i -g ./*.tgz",
-          "2) Start this server; it exposes ws://localhost:5679",
-          "3) Inject http://localhost:8080/react-bridge-client.js into your app (served from dist)"
-        ]
+        "dependencies": ["react"]
       }
     }
   }
