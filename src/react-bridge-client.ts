@@ -55,7 +55,6 @@ function LOG_ERROR(...args: any[]) {
   if (isLoggingEnabled()) console.error('[react-debugger]', ...args);
 }
 
-
 type Selector = {
   displayName?: string | { $regex: string };
   file?: string | { $regex: string };
@@ -512,12 +511,12 @@ class MCPDebuggerAgent {
 
         // also emit a control status so the server can fail fast if selector matched nothing
         const matchCount = (snapshotPayload as any)?.payload?.rows?.length ?? 0;
-          this.channels?.send('control', {
-            type: matchCount > 0 ? 'SUBSCRIBE_OK' : 'SUBSCRIBE_EMPTY',
-            subscriptionId: sub.id,
-            selector: sub.selector,
-            matchCount,
-          });
+        this.channels?.send('control', {
+          type: matchCount > 0 ? 'SUBSCRIBE_OK' : 'SUBSCRIBE_EMPTY',
+          subscriptionId: sub.id,
+          selector: sub.selector,
+          matchCount,
+        });
         break;
       }
       case 'UNSUBSCRIBE':
@@ -992,7 +991,7 @@ class MCPDebuggerAgent {
     if (!entry) entry = this.ringBuffer[this.ringBuffer.length - 1];
     if (!entry || !entry.perFiber) {
       // Not ready or evicted
-        this.channels?.send('control', {
+      this.channels?.send('control', {
         channel: 'control',
         type: 'NOT_READY',
         requestId: msg.requestId,
@@ -1123,18 +1122,18 @@ interface ReactDebuggerMCP {
 let globalInstance: MCPDebuggerAgent | null = null;
 
 // Expose global API for easy access by agent platforms
-    if (typeof window !== 'undefined') {
-      (window as any).ReactDebuggerMCP = {
-        init: (serverUrl?: string) => {
-          if (globalInstance) {
-            globalInstance.disconnect();
-          }
-          globalInstance = new MCPDebuggerAgent(serverUrl);
-          return globalInstance;
-        },
-        getInstance: () => globalInstance,
-        getInstanceId: () => globalInstance?.getInstanceId() || null,
-      } as ReactDebuggerMCP;
+if (typeof window !== 'undefined') {
+  (window as any).ReactDebuggerMCP = {
+    init: (serverUrl?: string) => {
+      if (globalInstance) {
+        globalInstance.disconnect();
+      }
+      globalInstance = new MCPDebuggerAgent(serverUrl);
+      return globalInstance;
+    },
+    getInstance: () => globalInstance,
+    getInstanceId: () => globalInstance?.getInstanceId() || null,
+  } as ReactDebuggerMCP;
 
   // Debug function to log ring buffer entries
   (window as any).logRingBufferEntries = () => {
@@ -1299,7 +1298,7 @@ class ChannelManager {
         this.lastNoticeAt.set(ch, now);
         return;
       } else if (ch === 'findings') {
-  LOG(`[ChannelManager.send] 📝 Channel '${ch}' summarizing findings`);
+        LOG(`[ChannelManager.send] 📝 Channel '${ch}' summarizing findings`);
         if (oncePerSec)
           this.control({
             kind: 'budgetNotice',
@@ -1321,7 +1320,9 @@ class ChannelManager {
           );
         }
       } else {
-  LOG(`[ChannelManager.send] ⏸️ Channel '${ch}' suspended due to rate limit`);
+        LOG(
+          `[ChannelManager.send] ⏸️ Channel '${ch}' suspended due to rate limit`
+        );
         if (oncePerSec)
           this.control({
             kind: 'budgetNotice',
@@ -1335,8 +1336,7 @@ class ChannelManager {
 
     try {
       LOG(`
-        [ChannelManager.send] 📤 Sending message to channel '${ch}' (${str.length} bytes)`
-      );
+        [ChannelManager.send] 📤 Sending message to channel '${ch}' (${str.length} bytes)`);
       this.ws.send(str);
       b.bytes += size;
       b.msgs += 1;
