@@ -1,13 +1,7 @@
 // src/index.tsx
 // React Debugger: High-performance canvas overlay + React UI
 
-import {
-  getFiberRects,
-  getFiberFromElement,
-  type FiberNode,
-} from './internals';
-import React from 'react';
-import { createRoot } from 'react-dom/client';
+import { getFiberFromElement, type FiberNode } from './internals';
 
 export interface DebuggerOptions {
   port?: number;
@@ -400,11 +394,15 @@ class DebugOverlay {
   private createDebuggerWidget() {
     if (typeof window === 'undefined') return;
 
-    // Open debugger in a new window
+    // Open debugger in a new window. If the browser blocks popups (common
+    // when opening outside a user gesture), fall back to rendering a small
+    // in-page toggle button which the user can click to open the debugger
+    // (user gesture -> not blocked).
     const debuggerUrl = 'http://127.0.0.1:5679/debugger';
     const windowFeatures =
       'width=720,height=600,resizable=yes,scrollbars=yes,status=no,location=no,toolbar=no,menubar=no';
 
+    // Try to open immediately (may be blocked)
     this.debuggerWindow = window.open(
       debuggerUrl,
       'react-debugger',
@@ -413,8 +411,54 @@ class DebugOverlay {
     this.debuggerWindowOrigin = new URL(debuggerUrl).origin;
 
     if (!this.debuggerWindow) {
-      console.error('Failed to open debugger window. Popup might be blocked.');
-      return;
+      // Popup blocked. Create a persistent small toggle button so the user
+      // can open the debugger via a click (user gesture).
+      console.warn('Debugger popup blocked — showing in-page toggle button.');
+
+      // Only create the button once
+      if (!document.getElementById('react-debugger-widget')) {
+        const btn = document.createElement('button');
+        btn.id = 'react-debugger-widget';
+        btn.title = 'Open React Debugger';
+        btn.innerText = '🐞';
+        btn.style.cssText = `
+          position: fixed;
+          right: 12px;
+          bottom: 12px;
+          width: 48px;
+          height: 48px;
+          border-radius: 24px;
+          background: #111;
+          color: #fff;
+          border: 1px solid rgba(255,255,255,0.06);
+          z-index: 999999;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          font-size: 20px;
+        `;
+
+        btn.addEventListener('click', () => {
+          // Attempt to open again on user gesture
+          this.debuggerWindow = window.open(
+            debuggerUrl,
+            'react-debugger',
+            windowFeatures
+          );
+          if (this.debuggerWindow) {
+            // Remove button once opened
+            try {
+              btn.remove();
+            } catch {}
+            this.debuggerWindowOrigin = new URL(debuggerUrl).origin;
+          } else {
+            console.warn('Failed to open debugger window from user gesture.');
+          }
+        });
+
+        document.body.appendChild(btn);
+      }
     }
 
     // Listen for messages from the debugger window

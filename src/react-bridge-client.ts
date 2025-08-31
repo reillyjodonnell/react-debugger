@@ -36,6 +36,26 @@ type CommitEnvelope = {
   findings?: any[];
 };
 
+// Runtime logging gate: default OFF. Set window.REACT_DEBUGGER_VERBOSE = true to enable.
+function isLoggingEnabled(): boolean {
+  if (typeof window === 'undefined') return false;
+  const w = window as any;
+  return !!w.REACT_DEBUGGER_VERBOSE || !!w.REACT_DEBUGGER_LOGS;
+}
+
+function LOG(...args: any[]) {
+  if (isLoggingEnabled()) console.log('[react-debugger]', ...args);
+}
+
+function LOG_WARN(...args: any[]) {
+  if (isLoggingEnabled()) console.warn('[react-debugger]', ...args);
+}
+
+function LOG_ERROR(...args: any[]) {
+  if (isLoggingEnabled()) console.error('[react-debugger]', ...args);
+}
+
+
 type Selector = {
   displayName?: string | { $regex: string };
   file?: string | { $regex: string };
@@ -141,7 +161,6 @@ class MCPDebuggerAgent {
 
   constructor(serverUrl = 'ws://localhost:5679') {
     this.serverUrl = serverUrl;
-    console.log(`[MCPAgent] ctor id=${this.instanceId} url=${serverUrl}`);
     this.ensureFiberDataBridge();
     this.connect();
   }
@@ -198,12 +217,6 @@ class MCPDebuggerAgent {
   }
 
   private onCommitFiberRootPatch(_id: any, root: any) {
-    console.log(
-      `[onCommitFiberRootPatch] id=${this.instanceId} begin, nextCommit=${
-        this.commitId + 1
-      }`
-    );
-
     try {
       // Update current root fiber for deref
       const bridge = (window as any).FiberDataBridge;
@@ -304,10 +317,6 @@ class MCPDebuggerAgent {
         }
       }
 
-      console.log(
-        `[onCommitFiberRootPatch] id=${this.instanceId} Processed ${fiberCount} fibers, found ${changesFound} changes, ${unmountCount} unmounts, total changes: ${changes.length}`
-      );
-
       const env: CommitEnvelope = {
         sessionId: this.sessionId,
         commitId: ++this.commitId,
@@ -315,10 +324,6 @@ class MCPDebuggerAgent {
         commitMs: performance.now() - start,
         changes,
       };
-
-      console.log(
-        `[onCommitFiberRootPatch] id=${this.instanceId} Created envelope for commit ${env.commitId} with ${env.changes.length} changes`
-      );
 
       // Update ring buffer snapshots for deref
       const perFiber = new Map<
@@ -343,55 +348,23 @@ class MCPDebuggerAgent {
         });
       }
 
-      console.log(
-        `[onCommitFiberRootPatch] id=${this.instanceId} about to push to ring, commit=${this.commitId}, perFiberSize=${perFiber.size}`
-      );
       this.ringBuffer.push({ commitId: this.commitId, perFiber });
-      console.log(
-        `[onCommitFiberRootPatch] id=${this.instanceId} ring after push len=${this.ringBuffer.length}`
-      );
       if (this.ringBuffer.length > this.ringSize) this.ringBuffer.shift();
-
-      // Evaluate subscriptions and send filtered commits
-      console.log(
-        `[onCommitFiberRootPatch] id=${
-          this.instanceId
-        } Channels available: ${!!this.channels}, WebSocket connected: ${
-          this.isConnected
-        }`
-      );
 
       if (this.channels) {
         const subs = Array.from(this.subscriptions.values());
-        console.log(
-          `[onCommitFiberRootPatch] id=${this.instanceId} Found ${subs.length} subscriptions`
-        );
 
         if (subs.length === 0) {
           // no-op until a SUBSCRIBE arrives
         } else {
           for (const sub of subs) {
-            console.log(
-              `[onCommitFiberRootPatch] id=${
-                this.instanceId
-              } Processing subscription ${
-                sub.id
-              } with channels: ${sub.channels.join(', ')}`
-            );
-
             if (!sub.channels.includes('commit')) {
-              console.log(
-                `[onCommitFiberRootPatch] id=${this.instanceId} Subscription ${sub.id} doesn't include 'commit' channel - skipping`
-              );
               continue;
             }
 
             const filtered = this.filterChangesBySelector(
               env.changes,
               sub.selector
-            );
-            console.log(
-              `[onCommitFiberRootPatch] id=${this.instanceId} Subscription ${sub.id} filtered ${env.changes.length} changes down to ${filtered.length}`
             );
 
             if (filtered.length) {
@@ -400,21 +373,11 @@ class MCPDebuggerAgent {
                   payload: { ...env, changes: filtered },
                   subscriptionId: sub.id,
                 });
-                console.log(
-                  `[onCommitFiberRootPatch] id=${this.instanceId} ✅ Successfully sent filtered commit to subscription ${sub.id}`
-                );
-              } catch (error) {
-                console.error(
-                  `[onCommitFiberRootPatch] id=${this.instanceId} ❌ Failed to send commit to subscription ${sub.id}:`,
-                  error
-                );
-              }
+              } catch (error) {}
 
               if (sub.channels.includes('findings')) {
                 const findings = this.buildFindings(filtered, env.commitId);
-                console.log(
-                  `[onCommitFiberRootPatch] id=${this.instanceId} Subscription ${sub.id} generated ${findings.length} findings`
-                );
+
                 if (findings.length) {
                   try {
                     this.channels.send('findings', {
@@ -426,42 +389,31 @@ class MCPDebuggerAgent {
                       },
                       subscriptionId: sub.id,
                     });
-                    console.log(
-                      `[onCommitFiberRootPatch] id=${this.instanceId} ✅ Successfully sent findings to subscription ${sub.id}`
-                    );
-                  } catch (error) {
-                    console.error(
-                      `[onCommitFiberRootPatch] id=${this.instanceId} ❌ Failed to send findings to subscription ${sub.id}:`,
-                      error
-                    );
-                  }
+                  } catch (error) {}
                 }
               }
             } else {
-              console.log(
-                `[onCommitFiberRootPatch] id=${this.instanceId} No filtered changes for subscription ${sub.id} - not sending`
-              );
             }
           }
         }
       } else {
-        console.warn(
+        LOG_WARN(
           `[onCommitFiberRootPatch] id=${this.instanceId} ⚠️ No channels manager available - cannot send data`
         );
       }
 
-      console.log(
+      LOG(
         `[onCommitFiberRootPatch] id=${this.instanceId} Completed commit ${
           env.commitId
         } in ${env.commitMs?.toFixed(2)}ms`
       );
     } catch (e) {
-      console.error(
+      LOG_ERROR(
         `[onCommitFiberRootPatch] id=${this.instanceId} fatal error inside commit handler:`,
         e
       );
     } finally {
-      console.log(
+      LOG(
         `[onCommitFiberRootPatch] id=${this.instanceId} end (may still proceed to channel sends)`
       );
     }
@@ -473,7 +425,6 @@ class MCPDebuggerAgent {
         this.ws = new WebSocket(this.serverUrl);
 
         this.ws.onopen = () => {
-          console.log('[MCPAgent] WebSocket connection opened');
           this.isConnected = true;
           this.reconnectAttempt = 0;
           // init channels manager
@@ -485,27 +436,13 @@ class MCPDebuggerAgent {
             control: { kbPerSec: 15, msgPerSec: 20 },
             snapshot: { kbPerSec: 150, msgPerSec: 10 },
           });
-          console.log('[MCPAgent] ChannelManager initialized with budgets:', {
-            commit: { kbPerSec: 150, msgPerSec: 10 },
-            render: { kbPerSec: 60, msgPerSec: 40 },
-            findings: { kbPerSec: 25, msgPerSec: 20 },
-            metrics: { kbPerSec: 10, msgPerSec: 2 },
-            control: { kbPerSec: 15, msgPerSec: 20 },
-            snapshot: { kbPerSec: 150, msgPerSec: 10 },
-          });
-          // flush buffer
-          console.log(
-            `[MCPAgent] Flushing ${this.messageBuffer.length} buffered messages`
-          );
+
           while (this.messageBuffer.length && this.isConnected) {
             const msg = this.messageBuffer.shift();
             try {
               this.ws!.send(JSON.stringify(msg));
             } catch (error) {
-              console.error(
-                '[MCPAgent] Failed to send buffered message:',
-                error
-              );
+              LOG_ERROR('[MCPAgent] Failed to send buffered message:', error);
             }
           }
         };
@@ -513,15 +450,13 @@ class MCPDebuggerAgent {
         this.ws.onmessage = (event) => {
           try {
             const message: MCPAgentMessage = JSON.parse(event.data);
-            console.log('message received: ', message);
             this.handleMessage(message);
           } catch (error) {
-            console.error('[MCP Agent] Failed to parse message:', error);
+            LOG_ERROR('[MCP Agent] Failed to parse message:', error);
           }
         };
 
         this.ws.onclose = () => {
-          console.log('[MCPAgent] WebSocket connection closed');
           this.isConnected = false;
           this.channels = null as any; // Clear channels manager
           const base = Math.min(
@@ -530,16 +465,12 @@ class MCPDebuggerAgent {
           );
           const jitter = Math.random() * 250;
           const reconnectDelay = base + jitter;
-          console.log(
-            `[MCPAgent] Reconnecting in ${reconnectDelay.toFixed(
-              0
-            )}ms (attempt ${this.reconnectAttempt})`
-          );
+
           setTimeout(doConnect, reconnectDelay);
         };
 
         this.ws.onerror = (error) => {
-          console.error('[MCP Agent] WebSocket error:', error);
+          LOG_ERROR('[MCP Agent] WebSocket error:', error);
         };
       } catch (error) {
         const base = Math.min(
@@ -576,20 +507,17 @@ class MCPDebuggerAgent {
 
         // seed ring buffer from live tree if empty
         if (this.ringBuffer.length === 0) {
-          console.log(
-            `[handleMessage] id=${this.instanceId} SUBSCRIBE: Ring buffer empty, seeding from live tree`
-          );
           this.seedCachesFromLiveTree();
         }
 
         // also emit a control status so the server can fail fast if selector matched nothing
         const matchCount = (snapshotPayload as any)?.payload?.rows?.length ?? 0;
-        this.channels?.send('control', {
-          type: matchCount > 0 ? 'SUBSCRIBE_OK' : 'SUBSCRIBE_EMPTY',
-          subscriptionId: sub.id,
-          selector: sub.selector,
-          matchCount,
-        });
+          this.channels?.send('control', {
+            type: matchCount > 0 ? 'SUBSCRIBE_OK' : 'SUBSCRIBE_EMPTY',
+            subscriptionId: sub.id,
+            selector: sub.selector,
+            matchCount,
+          });
         break;
       }
       case 'UNSUBSCRIBE':
@@ -602,9 +530,6 @@ class MCPDebuggerAgent {
         this.handleDerefRequest('hooks', message);
         break;
       case 'RESYNC': {
-        console.log(
-          `[handleMessage] id=${this.instanceId} RESYNC: Seeding caches from live tree`
-        );
         this.seedCachesFromLiveTree();
         const sub = message.id ? this.subscriptions.get(message.id) : undefined;
         if (sub) {
@@ -1067,7 +992,7 @@ class MCPDebuggerAgent {
     if (!entry) entry = this.ringBuffer[this.ringBuffer.length - 1];
     if (!entry || !entry.perFiber) {
       // Not ready or evicted
-      this.channels?.send('control', {
+        this.channels?.send('control', {
         channel: 'control',
         type: 'NOT_READY',
         requestId: msg.requestId,
@@ -1184,9 +1109,6 @@ class MCPDebuggerAgent {
         this.ringBuffer.push({ commitId: latest, perFiber });
         if (this.ringBuffer.length > this.ringSize) this.ringBuffer.shift();
       }
-      console.log(
-        `[seedCachesFromLiveTree] id=${this.instanceId} Seeded ring buffer with ${perFiber.size} fibers for commit ${latest}`
-      );
     }
   }
 }
@@ -1201,82 +1123,38 @@ interface ReactDebuggerMCP {
 let globalInstance: MCPDebuggerAgent | null = null;
 
 // Expose global API for easy access by agent platforms
-if (typeof window !== 'undefined') {
-  (window as any).ReactDebuggerMCP = {
-    init: (serverUrl?: string) => {
-      if (globalInstance) {
-        console.log(
-          `[ReactDebuggerMCP.init] Disconnecting existing instance id=${globalInstance.getInstanceId()}`
-        );
-        globalInstance.disconnect();
-      }
-      globalInstance = new MCPDebuggerAgent(serverUrl);
-      console.log(
-        `[ReactDebuggerMCP.init] Created new instance id=${globalInstance.getInstanceId()}`
-      );
-      return globalInstance;
-    },
-    getInstance: () => globalInstance,
-    getInstanceId: () => globalInstance?.getInstanceId() || null,
-  } as ReactDebuggerMCP;
+    if (typeof window !== 'undefined') {
+      (window as any).ReactDebuggerMCP = {
+        init: (serverUrl?: string) => {
+          if (globalInstance) {
+            globalInstance.disconnect();
+          }
+          globalInstance = new MCPDebuggerAgent(serverUrl);
+          return globalInstance;
+        },
+        getInstance: () => globalInstance,
+        getInstanceId: () => globalInstance?.getInstanceId() || null,
+      } as ReactDebuggerMCP;
 
   // Debug function to log ring buffer entries
   (window as any).logRingBufferEntries = () => {
     const instance = globalInstance;
     if (!instance) {
-      console.log('[logRingBufferEntries] No MCP debugger instance found');
       return;
     }
-
-    const id = (instance as any).instanceId;
-    console.log(`[logRingBufferEntries] instanceId=${id}`);
 
     const ringBuffer = (instance as any).ringBuffer;
     if (!ringBuffer || ringBuffer.length === 0) {
-      console.log(
-        `[logRingBufferEntries] instanceId=${id} Ring buffer is empty or not initialized`
-      );
       return;
     }
-
-    console.log(
-      `[logRingBufferEntries] instanceId=${id} Ring buffer has ${ringBuffer.length} entries:`
-    );
-    ringBuffer.forEach((entry: any, index: number) => {
-      console.log(`Entry ${index}:`, {
-        commitId: entry.commitId,
-        fiberCount: entry.perFiber.size,
-        fibers: Array.from(entry.perFiber.keys()).slice(0, 5), // Show first 5 FIDs
-        sample:
-          entry.perFiber.size > 0
-            ? Array.from(entry.perFiber.entries())[0]
-            : null,
-      });
-    });
-
-    // Also log the current commit ID
-    console.log(
-      `[logRingBufferEntries] instanceId=${id} Current commit ID: ${
-        (instance as any).commitId
-      }`
-    );
   };
 
   // Debug function to check if instances match
   (window as any).checkInstanceMatch = () => {
     const instance = globalInstance;
     if (!instance) {
-      console.log('[checkInstanceMatch] No global instance found');
       return;
     }
-    const globalId = instance.getInstanceId();
-    console.log(`[checkInstanceMatch] Global instance ID: ${globalId}`);
-    console.log(
-      '[checkInstanceMatch] Look for this ID in commit logs to verify they match'
-    );
-    console.log(
-      '[checkInstanceMatch] If commit logs show a different ID, you have a two-instance problem'
-    );
   };
 }
 
@@ -1290,7 +1168,6 @@ if (typeof window !== 'undefined') {
     (isExplicitlyEnabled || isScriptLoaded) &&
     !(window as any).__MCP_AGENT_ACTIVE
   ) {
-    console.log('[MCP Agent] Auto-initializing MCP debugger agent');
     (window as any).__MCP_AGENT_ACTIVE = true;
     (window as any).ReactDebuggerMCP.init(
       (window as any).REACT_DEBUGGER_WS_URL || undefined
@@ -1347,8 +1224,6 @@ class ChannelManager {
   }
 
   send(ch: ChannelName, payload: any) {
-    console.log(`[ChannelManager.send] Attempting to send to channel '${ch}'`);
-
     const b = this.buckets.get(ch)!;
     this.refill(b);
 
@@ -1358,24 +1233,10 @@ class ChannelManager {
         : JSON.stringify({ channel: ch, ...payload });
     const size = str.length;
 
-    console.log(
-      `[ChannelManager.send] Channel '${ch}' - size: ${size} bytes, current bucket: ${
-        b.bytes
-      }/${b.budget.kbPerSec * 1024} bytes, ${b.msgs}/${b.budget.msgPerSec} msgs`
-    );
-
     if (
       b.bytes + size > b.budget.kbPerSec * 1024 ||
       b.msgs + 1 > b.budget.msgPerSec
     ) {
-      console.warn(
-        `[ChannelManager.send] 🚫 Rate limit exceeded for channel '${ch}' - bytes: ${
-          b.bytes + size
-        }/${b.budget.kbPerSec * 1024}, msgs: ${b.msgs + 1}/${
-          b.budget.msgPerSec
-        }`
-      );
-
       // Degrade per channel
       const now = Date.now();
       const last = this.lastNoticeAt.get(ch) || 0;
@@ -1387,18 +1248,9 @@ class ChannelManager {
           this.control({ kind: 'budgetNotice', channel: ch, action: 'sample' });
         // send only 1/10 frames
         if (Math.random() < 0.9) {
-          console.log(
-            `[ChannelManager.send] 📊 Channel '${ch}' sampling - message dropped (90% chance)`
-          );
           return;
         }
-        console.log(
-          `[ChannelManager.send] 📊 Channel '${ch}' sampling - message allowed (10% chance)`
-        );
       } else if (ch === 'commit') {
-        console.log(
-          `[ChannelManager.send] 🔄 Channel '${ch}' coalescing messages`
-        );
         if (oncePerSec)
           this.control({
             kind: 'budgetNotice',
@@ -1418,20 +1270,20 @@ class ChannelManager {
         };
         this.pendingCommit = merge(this.pendingCommit, payload);
         if (!this.coalesceTimer) {
-          console.log(
+          LOG(
             `[ChannelManager.send] ⏱️ Starting coalesce timer for channel '${ch}'`
           );
           this.coalesceTimer = setTimeout(() => {
             try {
               const s = JSON.stringify({ channel: ch, ...this.pendingCommit });
-              console.log(
+              LOG(
                 `[ChannelManager.send] 📤 Sending coalesced message for channel '${ch}' (${s.length} bytes)`
               );
               this.ws.send(s);
               b.bytes += s.length;
               b.msgs += 1;
             } catch (error) {
-              console.error(
+              LOG_ERROR(
                 `[ChannelManager.send] ❌ Failed to send coalesced message for channel '${ch}':`,
                 error
               );
@@ -1440,16 +1292,14 @@ class ChannelManager {
             this.coalesceTimer = null;
           }, 50);
         } else {
-          console.log(
+          LOG(
             `[ChannelManager.send] ⏱️ Coalesce timer already running for channel '${ch}'`
           );
         }
         this.lastNoticeAt.set(ch, now);
         return;
       } else if (ch === 'findings') {
-        console.log(
-          `[ChannelManager.send] 📝 Channel '${ch}' summarizing findings`
-        );
+  LOG(`[ChannelManager.send] 📝 Channel '${ch}' summarizing findings`);
         if (oncePerSec)
           this.control({
             kind: 'budgetNotice',
@@ -1466,14 +1316,12 @@ class ChannelManager {
             seen.add(k);
             return true;
           });
-          console.log(
+          LOG(
             `[ChannelManager.send] 📝 Channel '${ch}' summarized ${originalCount} findings down to ${payload.findings.length}`
           );
         }
       } else {
-        console.log(
-          `[ChannelManager.send] ⏸️ Channel '${ch}' suspended due to rate limit`
-        );
+  LOG(`[ChannelManager.send] ⏸️ Channel '${ch}' suspended due to rate limit`);
         if (oncePerSec)
           this.control({
             kind: 'budgetNotice',
@@ -1486,13 +1334,13 @@ class ChannelManager {
     }
 
     try {
-      console.log(
-        `[ChannelManager.send] 📤 Sending message to channel '${ch}' (${str.length} bytes)`
+      LOG(`
+        [ChannelManager.send] 📤 Sending message to channel '${ch}' (${str.length} bytes)`
       );
       this.ws.send(str);
       b.bytes += size;
       b.msgs += 1;
-      console.log(
+      LOG(
         `[ChannelManager.send] ✅ Successfully sent to channel '${ch}' - new bucket: ${
           b.bytes
         }/${b.budget.kbPerSec * 1024} bytes, ${b.msgs}/${
@@ -1500,7 +1348,7 @@ class ChannelManager {
         } msgs`
       );
     } catch (error) {
-      console.error(
+      LOG_ERROR(
         `[ChannelManager.send] ❌ WebSocket send failed for channel '${ch}':`,
         error
       );
@@ -1523,7 +1371,7 @@ class ChannelManager {
       b.msgs = 0;
       b.t = now;
       if (prevBytes > 0 || prevMsgs > 0) {
-        console.log(
+        LOG(
           `[ChannelManager.refill] Bucket refilled after ${timeSinceLastRefill.toFixed(
             0
           )}ms - was: ${prevBytes} bytes, ${prevMsgs} msgs`
