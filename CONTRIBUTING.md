@@ -32,6 +32,14 @@ npx @react-debugger/core init
 npx @react-debugger/core mcp
 ```
 
+**Be sure to overwrite the script** generated on the client's html entry:
+
+<script src="//unpkg.com/@react-debugger/core/dist/react-bridge-client.js"></script>
+
+should point to local http server!
+
+<script src="//localhost:8080/dist/react-bridge-client.js"></script>
+
 Optional: preview the MCP server (useful when testing server behavior):
 
 ```bash
