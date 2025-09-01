@@ -4,7 +4,6 @@
 
 ```bash
 bun install
-bun run build
 ```
 
 ## Development Workflow

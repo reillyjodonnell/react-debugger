@@ -240,9 +240,6 @@ async function runInit() {
 function cursorRuleMarkdown(): string {
   return `
 ---
-description: 'Enforce diagnostic-first workflow using React Debugger MCP'
-globs:
-  - '**/*'
 alwaysApply: true
 ---
 
