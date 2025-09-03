@@ -3,16 +3,18 @@ name: Release (tag -> npm via OIDC)
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
   workflow_dispatch: {}
+
+permissions:
+  contents: write # create GitHub Release
+  id-token: write # required for npm OIDC
 
 jobs:
   publish:
     name: Build & Publish
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # create GitHub Release
-      id-token: write # <-- required for npm OIDC
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,21 +29,45 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
 
+      # Optional: ensure the git tag "vX.Y.Z" matches package.json version
+      - name: Verify tag matches package.json version
+        id: verify
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "Tag version: $TAG_VERSION"
+          echo "package.json version: $PKG_VERSION"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag and package.json version mismatch!"
+            exit 1
+          fi
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Build
         run: bun run build
 
-      # OIDC auth to npm (no token)
+      # OIDC auth to npm (no secret token needed)
       - name: Setup Node for npm (OIDC)
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: "https://registry.npmjs.org"
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@react-debugger' # <-- IMPORTANT for scoped publish
           always-auth: true
+
+      # (Optional) ensure public + provenance defaults even without CLI flags
+      - name: Show publishConfig
+        run: node -e "console.log(require('./package.json').publishConfig || {})"
+
+      - name: Publish to npm with provenance
+        env:
+          # npm will exchange the GitHub OIDC token automatically when --provenance is used
+          # No NPM_TOKEN is required.
+          NODE_AUTH_TOKEN: '' # explicitly blank to avoid falling back to old token flows
+        run: npm publish --access public --provenance
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.verify.outputs.version }}
           generate_release_notes: true
-
-      - name: Publish to npm with provenance
-        run: npm publish --access public --provenance
