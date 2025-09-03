@@ -49,3 +49,13 @@ Notes
 
 - Usually: edit → `bun run local` → `npx @react-debugger/core <command>` — that's all you need.
 - If you change files that affect the served bridge or packaging, rerun `bun run local` before testing.
+
+## Releasing a new version
+
+1. Make sure `main` is up to date and tests/build pass.
+2. Run the following (replace version as needed):
+
+   ```bash
+   npm version <new-version> -m "release %s"
+   git push origin main --tags
+   ```
