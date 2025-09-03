@@ -1,0 +1,29 @@
+name: Release (tag -> npm)
+on:
+  push:
+    tags:
+      - "v*" # e.g. v0.0.15
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.x }
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

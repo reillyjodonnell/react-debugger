@@ -1,5 +1,10 @@
 # React Debugger
 
+[![npm version](https://img.shields.io/npm/v/@react-debugger/core.svg)](https://www.npmjs.com/package/@react-debugger/core)
+![license](https://img.shields.io/github/license/reillyjodonnell/react-debugger.svg)
+[![CI](https://github.com/reillyjodonnell/react-debugger/actions/workflows/ci.yml/badge.svg)](https://github.com/reillyjodonnell/react-debugger/actions/workflows/ci.yml)
+![status: alpha](https://img.shields.io/badge/status-alpha-yellow)
+
 Supercharge agents with React runtime values.
 
 > ⚠️ Alpha. APIs subject to change.
@@ -47,10 +52,10 @@ This opens an interactive, terminal-only help menu with fixes for common problem
 
 ## What you get
 
-- **Agents with context**  
+- **Agents with context**
   They don’t just guess — they can tell you exactly why your button isn’t clickable, or why a prop isn’t updating.
 
-- **Faster debugging**  
+- **Faster debugging**
   “This component has disabled={true} because it’s inheriting state from X.” → Answers that normally take you 10–20 minutes to track down.
 
 ## Requirements
