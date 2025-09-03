@@ -29,13 +29,14 @@
     "typecheck": "tsc --noEmit",
     "local": "bun run build && npm pack && sudo npm i -g ./$(npm pack | tail -1) && bunx serve dist --cors -p 8080"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "keywords": [
     "react",
     "debugger",
-    "chrome",
-    "devtools",
-    "cdp",
-    "overlay"
+    "agents"
   ],
   "author": "",
   "license": "MIT",
