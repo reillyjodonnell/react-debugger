@@ -40,7 +40,9 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9"
   },
   "peerDependencies": {
     "typescript": "^5"
