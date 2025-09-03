@@ -1,15 +1,27 @@
 name: CI
+
 on:
-  pull_request: { branches: [main] }
-  push: { branches: [main] }
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
 
 jobs:
   test-build:
+    name: Test & Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with: { bun-version: 1.x }
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+          github-token: ${{ secrets.GH_TOKEN }}
+
+      - name: Verify Bun
+        run: bun --version
 
       - name: Install
         run: bun install --frozen-lockfile
