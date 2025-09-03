@@ -14,6 +14,8 @@ jobs:
   publish:
     name: Build & Publish
     runs-on: ubuntu-latest
+    # MUST MATCH the "Environment name" field in npm Trusted Publisher UI
+    environment: npm-publish
 
     steps:
       - name: Checkout
@@ -29,14 +31,14 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
 
-      # Ensure the git tag "vX.Y.Z" matches package.json version
+      # Ensure tag vX.Y.Z matches package.json version
       - name: Verify tag matches package.json version
         id: verify
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
           PKG_VERSION=$(node -p "require('./package.json').version")
-          echo "Tag version: $TAG_VERSION"
-          echo "package.json version: $PKG_VERSION"
+          echo "Tag: $TAG_VERSION"
+          echo "Pkg: $PKG_VERSION"
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "Tag and package.json version mismatch!"
             exit 1
@@ -55,9 +57,15 @@ jobs:
           scope: '@react-debugger' # IMPORTANT for scoped publish
           always-auth: true
 
-      # Optional: show publishConfig for visibility
-      - name: Show publishConfig
-        run: node -e "console.log(require('./package.json').publishConfig || {})"
+      # Tiny diagnostics to confirm token + scope are wired
+      - name: npm diagnostics
+        run: |
+          echo "scope registry:" $(npm config get @react-debugger:registry)
+          if npm config get //registry.npmjs.org/:_authToken >/dev/null 2>&1; then
+            echo "auth token present ✅"
+          else
+            echo "auth token missing ❌"; exit 1
+          fi
 
       - name: Publish to npm with provenance
         run: npm publish --access public --provenance
