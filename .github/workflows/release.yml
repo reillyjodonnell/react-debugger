@@ -29,7 +29,7 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
 
-      # Optional: ensure the git tag "vX.Y.Z" matches package.json version
+      # Ensure the git tag "vX.Y.Z" matches package.json version
       - name: Verify tag matches package.json version
         id: verify
         run: |
@@ -52,18 +52,14 @@ jobs:
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
-          scope: '@react-debugger' # <-- IMPORTANT for scoped publish
+          scope: '@react-debugger' # IMPORTANT for scoped publish
           always-auth: true
 
-      # (Optional) ensure public + provenance defaults even without CLI flags
+      # Optional: show publishConfig for visibility
       - name: Show publishConfig
         run: node -e "console.log(require('./package.json').publishConfig || {})"
 
       - name: Publish to npm with provenance
-        env:
-          # npm will exchange the GitHub OIDC token automatically when --provenance is used
-          # No NPM_TOKEN is required.
-          NODE_AUTH_TOKEN: '' # explicitly blank to avoid falling back to old token flows
         run: npm publish --access public --provenance
 
       - name: Create GitHub Release
