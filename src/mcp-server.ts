@@ -1,8 +1,4 @@
 // src/mcp-server.ts
-// MCP Server for React Debugger - handles agent communication via STDIO and WebSocket
-
-// Legacy track-by-id interfaces removed
-
 interface McpMessage {
   jsonrpc: '2.0';
   id?: string | number;
