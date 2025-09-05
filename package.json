@@ -1,6 +1,6 @@
 {
   "name": "@react-debugger/core",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "React debugger for humans and AI agents - inspect components, set breakpoints, and understand React internals programmatically",
   "main": "dist/cli.js",
   "exports": {
