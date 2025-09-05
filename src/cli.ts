@@ -436,7 +436,7 @@ const initClaudeCode = async () => {
           .toString();
       } catch (err: any) {
         console.log(
-          `  ${ANSI.gray}  • MCP server already registered${ANSI.reset}`
+          `  ${ANSI.gray}• MCP server already registered${ANSI.reset}`
         );
       }
       return { remote: true, cmdOutput: out, reachable: true };
