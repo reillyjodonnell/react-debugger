@@ -804,6 +804,23 @@ class ReactMcpServer {
         break;
       }
 
+      case 'ping': {
+        try {
+          // Simple health check response
+          this.sendMcpResponse({
+            jsonrpc: '2.0',
+            id: message.id,
+            result: {
+              content: [{ type: 'text', text: 'pong' }],
+              structuredContent: { ok: true },
+            },
+          });
+        } catch (error) {
+          this.sendMcpError(-32000, `Ping failed: ${error}`, message.id);
+        }
+        break;
+      }
+
       default:
         this.sendMcpError(-32601, `Tool not found: ${name}`, message.id);
     }
