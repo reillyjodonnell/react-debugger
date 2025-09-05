@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import readline from 'readline';
+import net from 'net';
 
 // Simple ANSI color helpers (no external deps)
 // Keep only three strong colors: green (success), yellow (warnings), cyan (headings/accents).
@@ -46,6 +47,7 @@ const TEMPLATE_PATH = path.join(__dirname, 'templates', 'mcp.json');
 const subcommand = argv.find((a) => !a.startsWith('-')) || ''; // e.g. 'init', 'mcp', 'overlay', or a URL
 
 const portFlagIndex = argv.findIndex((a) => a === '--port' || a === '-p');
+const wsPort = portFlagIndex > -1 ? Number(argv[portFlagIndex + 1]) : 5679;
 
 const cwd = process.cwd();
 
@@ -516,9 +518,40 @@ const handleHelp = () => {
   });
 };
 
-const handleMcp = () => {
-  console.log('Handling mcp...');
+const handleMcp = async () => {
+  // Check port availability BEFORE starting server
+  const free = await isPortAvailable(wsPort);
+  if (!free) {
+    console.error(
+      `❌ Port ${wsPort} is already in use. Please stop the other process or run with --port <free-port>.`
+    );
+    process.exit(1);
+  }
+
+  // In MCP server mode, redirect logs to stderr (keep stdout clean for JSON-RPC over stdio if used)
+  console.error('🤖 Starting React Debugger MCP Server...');
+  console.error(
+    `📡 MCP server will be available via ${'STDIO'}${
+      wsPort ? ` (WS fallback ws://localhost:${wsPort})` : ''
+    }`
+  );
+
+  const { startMcpServer } = await import('./mcp-server');
+  await startMcpServer(wsPort);
+  return;
 };
+
+async function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const tester = net
+      .createServer()
+      .once('error', () => resolve(false))
+      .once('listening', () => {
+        tester.close(() => resolve(true));
+      })
+      .listen(port, '127.0.0.1');
+  });
+}
 
 async function main() {
   switch (subcommand) {
