@@ -56,5 +56,3 @@ This opens an interactive, terminal-only help menu with fixes for common problem
 ## Requirements
 
 - React 16.8+
-- Chrome (for debugging)
-- bun (`npm i -g bun`)
