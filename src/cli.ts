@@ -1,28 +1,42 @@
 #!/usr/bin/env node
 
-import { spawn, exec } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import path from 'path';
-import net from 'net';
 import readline from 'readline';
 
 // Simple ANSI color helpers (no external deps)
+// Keep only three strong colors: green (success), yellow (warnings), cyan (headings/accents).
+// Use dim for secondary/auxiliary text. Underline is reserved for copy-paste snippets only.
 const ANSI = {
   reset: '\u001b[0m',
   bold: '\u001b[1m',
   dim: '\u001b[2m',
-  green: '\u001b[32m',
-  yellow: '\u001b[33m',
-  cyan: '\u001b[36m',
+  underline: '\u001b[4m',
+
+  green: '\u001b[32m', // success
+  yellow: '\u001b[33m', // warnings
+  cyan: '\u001b[36m', // accents / headings
+  gray: '\u001b[90m', // secondary text (use dim for FYI)
+  red: '\u001b[31m', // errors
 };
+
+// Bridge tag used when injecting into HTML/TSX
+const BRIDGE_SRC =
+  '//unpkg.com/@react-debugger/core/dist/react-bridge-client.js';
+const BRIDGE_TAG = `<script src="${BRIDGE_SRC}"></script>`;
+
+// Result shape for detectAndInjectBridge
+interface InjectResult {
+  detected: string | null;
+  filePath: string | null;
+  injected: boolean;
+  reason?: string;
+}
 
 // Get the directory of this script at runtime
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const execAsync = promisify(exec);
 
 const argv = process.argv.slice(2);
 
@@ -30,214 +44,296 @@ const TEMPLATE_PATH = path.join(__dirname, 'templates', 'mcp.json');
 
 // Subcommands & flags
 const subcommand = argv.find((a) => !a.startsWith('-')) || ''; // e.g. 'init', 'mcp', 'overlay', or a URL
-const isInit = subcommand === 'init';
-const isMcpServerMode = subcommand === 'mcp';
-const isHelp = subcommand === 'help';
 
 const portFlagIndex = argv.findIndex((a) => a === '--port' || a === '-p');
-const wsPort = portFlagIndex > -1 ? Number(argv[portFlagIndex + 1]) : 5679;
 
-// Optional explicit client flags to tailor messaging and behavior
-const flagCursor = argv.includes('--cursor');
-const flagVscode = argv.includes('--vscode');
-const flagClaude = argv.includes('--claude');
+const cwd = process.cwd();
 
-// Target URL logic (for human/debugger mode)
-// If a recognized subcommand (init|mcp|overlay) was provided, the target URL
-// may be the NEXT positional argument. Otherwise, treat the subcommand itself
-// as the target URL (backwards compatibility with the older CLI).
-let urlArg: string | undefined;
-if (isInit || isMcpServerMode) {
-  const idx = argv.indexOf(subcommand);
-  urlArg = argv[idx + 1];
-} else {
-  urlArg = subcommand;
-}
-const targetUrl = urlArg || 'localhost:3000';
-
-async function main() {
-  if (isInit) {
-    await runInit();
-    return;
-  }
-
-  if (isMcpServerMode) {
-    // Check port availability BEFORE starting server
-    const free = await isPortAvailable(wsPort);
-    if (!free) {
-      console.error(
-        `❌ Port ${wsPort} is already in use. Please stop the other process or run with --port <free-port>.`
-      );
-      process.exit(1);
-    }
-
-    // In MCP server mode, redirect logs to stderr (keep stdout clean for JSON-RPC over stdio if used)
-    console.error('🤖 Starting React Debugger MCP Server...');
-    console.error(
-      `📡 MCP server will be available via ${'STDIO'}${
-        wsPort ? ` (WS fallback ws://localhost:${wsPort})` : ''
-      }`
+const handleInit = async () => {
+  const injectRes = detectAndInjectBridge(cwd);
+  if (injectRes.injected) {
+    console.log(
+      `  ${ANSI.green}✔${ANSI.reset} Detected ${ANSI.cyan}${
+        injectRes.detected
+      }${ANSI.reset} and injected bridge into ${ANSI.gray}${rel(
+        injectRes.filePath!
+      )}${ANSI.reset}`
     );
-
-    const { startMcpServer } = await import('./mcp-server');
-    await startMcpServer(wsPort);
-    return;
+    console.log('');
+  } else if (injectRes.detected) {
+    console.log(
+      `  ${ANSI.yellow}⚠${ANSI.reset} Detected ${ANSI.cyan}${
+        injectRes.detected
+      }${ANSI.reset} but couldn't auto-inject (${ANSI.gray}${
+        injectRes.reason ?? 'no <head> tag found'
+      }${ANSI.reset}).`
+    );
+  } else {
+    console.log(`${ANSI.yellow}⚠ No framework detected.${ANSI.reset}`);
+    console.log('');
+    console.log(
+      `  Add this to your <head> (e.g., index.html or app.html):${ANSI.reset}`
+    );
+    console.log(`  ${ANSI.cyan}${BRIDGE_TAG}${ANSI.reset}`);
+    console.log('');
   }
 
-  if (isHelp) {
-    await runHelpInteractive();
-    return;
-  }
-}
+  // find what client we are going to init
+  const clientTypes = ['cursor', 'claude'];
+  const passedClient = clientTypes.find((type) => argv.includes(`--${type}`));
+  if (passedClient) {
+    // init specific client
+    switch (passedClient) {
+      case 'cursor':
+        initCursor();
+        return;
 
-/* -------------------------- init subcommand -------------------------- */
-
-function loadMcpTemplate(): any {
-  try {
-    if (existsSync(TEMPLATE_PATH)) {
-      const raw = readFileSync(TEMPLATE_PATH, 'utf8');
-      return JSON.parse(raw);
+      case 'claude':
+        await initClaudeCode();
+        return;
     }
-  } catch {
-    console.error('Failed to load MCP template');
   }
-  return { mcpServers: {} };
-}
-function findMcpTargetsInProject(cwd: string): string[] {
-  const candidates = [
-    path.join(cwd, '.cursor', 'mcp.json'),
-    path.join(cwd, 'mcp.json'),
-  ];
-  return candidates.filter((p) => existsSync(p));
-}
+  console.log(`${ANSI.bold}Select your MCP client:${ANSI.reset}`);
+  const labels = ['Cursor', 'Claude code'];
 
-async function runInit() {
-  const cwd = process.cwd();
+  console.log(`  ${ANSI.cyan}1${ANSI.reset}) ${labels[0]}`);
+  console.log(`  ${ANSI.cyan}2${ANSI.reset}) ${labels[1]}`);
 
-  // 1) Ensure Cursor rule first
+  if (process.stdin.isTTY) {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    const ans = await new Promise<string>((res) =>
+      rl.question(`\n${ANSI.bold}Choose (1–2): ${ANSI.reset}`, res)
+    );
+    rl.close();
+    const choice = (ans || '').trim();
+    const mcpClient = labels[parseInt(choice) - 1];
+    console.log('');
+    switch (mcpClient) {
+      case 'Cursor':
+        initCursor();
+        break;
+      case 'VSCode':
+        initVSCode();
+        break;
+      case 'Claude code':
+        await initClaudeCode();
+        break;
+    }
+  }
+};
+
+const initCursor = () => {
+  console.log('Initializing Cursor...');
   const cursorDir = path.join(cwd, '.cursor');
   mkdirp(cursorDir);
   const rulesDir = path.join(cursorDir, 'rules');
   mkdirp(rulesDir);
   const rulePath = path.join(rulesDir, 'react-debugger.mdc');
-  writeIfAbsent(rulePath, cursorRuleMarkdown());
-  console.log(`  ✔ Ensured Cursor rule ${rel(rulePath)}`);
+  const hadRule = existsSync(rulePath);
 
-  // 2) Ensure MCP config from template (non-destructive)
-  const serverId = 'react-debugger';
-  const template = loadMcpTemplate();
-  const serverConfig = template?.mcpServers?.[serverId];
-  if (!serverConfig) {
-    throw new Error(`Template is missing "${serverId}" definition`);
+  if (!existsSync(rulePath)) {
+    writeFileSync(rulePath, cursorRuleMarkdown(), 'utf8');
+  }
+  if (hadRule) {
+    console.log(`${ANSI.gray}  • Already configured: ${rel(rulePath)}`);
+  } else {
+    console.log(`  ✔ Created: ${rel(rulePath)}`);
   }
 
-  const existingTargets = findMcpTargetsInProject(cwd);
-  if (existingTargets.length === 0) {
-    const defaultPath = path.join(cwd, '.cursor', 'mcp.json');
-    mkdirp(path.dirname(defaultPath));
-    ensureMcpServer(defaultPath, serverId, serverConfig, template);
+  const defaultPath = path.join(cwd, '.cursor', 'mcp.json');
+  mkdirp(path.dirname(defaultPath));
+  const serverId = 'react-debugger';
+  const mcpTemplateFile = existsSync(TEMPLATE_PATH)
+    ? JSON.parse(readFileSync(TEMPLATE_PATH, 'utf8'))
+    : {};
+  const serverConfig = mcpTemplateFile?.mcpServers?.[serverId];
+  const res = ensureMcpServer(
+    defaultPath,
+    'react-debugger',
+    serverConfig,
+    mcpTemplateFile
+  );
+  if (res.added) {
     console.log(`  ✔ Created ${rel(defaultPath)} and added ${serverId}`);
   } else {
-    for (const filePath of existingTargets) {
-      mkdirp(path.dirname(filePath));
-      const res = ensureMcpServer(filePath, serverId, serverConfig, template);
-      if (res.added) {
-        console.log(`  ✔ Added ${serverId} to ${rel(filePath)}`);
-      }
+    console.log(`${ANSI.gray}  • Already configured: ${rel(defaultPath)}`);
+  }
+  console.log('');
+  if (res.added && hadRule) {
+    console.log(`${ANSI.green}✔ Config already present${ANSI.reset}`);
+  } else {
+    console.log(ANSI.green + '✔ Setup complete!' + ANSI.reset + '\n');
+  }
+  console.log(ANSI.bold + 'Next steps' + ANSI.reset);
+  console.log(
+    '  • You should see a popup:\n' +
+      '    `New MCP server detected: react-debugger` → click ' +
+      ANSI.bold +
+      'Enable' +
+      ANSI.reset +
+      '\n' +
+      ANSI.dim +
+      '  • If no popup: Settings → MCP & Integrations → MCP Tools → toggle on `react-debugger`' +
+      ANSI.reset +
+      '\n\n'
+  );
+  console.log(
+    `${ANSI.gray}Need help? ${ANSI.underline}npx @react-debugger/core help${ANSI.reset}`
+  );
+};
+
+/**
+ * Ensures an MCP server entry exists in `filePath` without clobbering other servers.
+ * - Creates file from template if missing.
+ * - Adds the `serverId` if absent.
+ * - If present, leaves existing config untouched (no surprise overwrites).
+ */
+function ensureMcpServer(
+  filePath: string,
+  serverId: string,
+  serverConfig: Record<string, any>,
+  templateObj?: Record<string, any>
+) {
+  const hadFile = existsSync(filePath);
+
+  // If no file, start from the template wholesale; otherwise read existing.
+  let base: any = hadFile
+    ? readJsonSafe(filePath)
+    : templateObj && typeof templateObj === 'object'
+    ? JSON.parse(JSON.stringify(templateObj))
+    : {};
+  if (!base || typeof base !== 'object') base = {};
+
+  // If we *do* have an existing file, merge in any missing top-level keys from the template (non-destructive).
+  if (hadFile && templateObj && typeof templateObj === 'object') {
+    for (const [k, v] of Object.entries(templateObj)) {
+      if (k === 'mcpServers') continue; // handled below
+      if (!(k in base)) base[k] = v;
     }
   }
 
-  // 3) Detect framework and inject the bridge <script> into <head>
-  const injectRes = detectAndInjectBridge(cwd);
-  if (injectRes.injected) {
-    console.log(
-      `  ✔ Detected ${injectRes.detected} and injected bridge into ${rel(
-        injectRes.filePath!
-      )}`
-    );
-  } else if (injectRes.detected) {
-    console.log(
-      `  ○ Detected ${injectRes.detected} but couldn't auto-inject (${
-        injectRes.reason ?? 'no <head> tag found'
-      }).`
-    );
-    console.log('    Add this to your <head>:');
-    console.log(`    ${BRIDGE_TAG}`);
-  } else {
-    console.log(
-      '  ○ Could not detect framework. Add this to your <head> manually:'
-    );
-    console.log(`    ${BRIDGE_TAG}`);
+  if (!base.mcpServers || typeof base.mcpServers !== 'object')
+    base.mcpServers = {};
+
+  const hadServer = !!base.mcpServers[serverId];
+  if (!hadServer) {
+    base.mcpServers[serverId] = serverConfig;
   }
 
-  console.log('\n✅ Init complete.');
-
-  // Summarize succinctly
-  const added: string[] = [];
-  // Cursor rule always added/ensured
-  added.push('.cursor/rules/react-debugger.mdc');
-
-  // mcp.json targets
-  const targets = findMcpTargetsInProject(cwd);
-  if (targets.length === 0) {
-    added.push('.cursor/mcp.json');
-  } else {
-    for (const filePath of targets) added.push(rel(filePath));
+  // Write if the file didn't exist (seed from template) or if we added the server.
+  if (!hadFile || !hadServer) {
+    try {
+      mkdirp(path.dirname(filePath));
+      writeFileSync(filePath, JSON.stringify(base, null, 2) + '\n', 'utf8');
+    } catch (err) {
+      console.error(`Failed to write MCP config to ${filePath}:`, err);
+      throw err;
+    }
   }
 
-  // Bridge injection
-  const injectRes2 = detectAndInjectBridge(cwd);
-  const frameworkLabel = injectRes2.detected || 'your project';
-  if (injectRes2.injected) {
-    added.push(`bridge injected into ${rel(injectRes2.filePath!)}`);
-  }
-
-  const detectedClient = detectClientFromProject(cwd);
-  const requestedClient = flagCursor
-    ? 'cursor'
-    : flagVscode
-    ? 'vscode'
-    : flagClaude
-    ? 'claude'
-    : null;
-  const clientToShow = requestedClient || detectedClient || 'your editor';
-
-  console.log(
-    '\n' +
-      ANSI.bold +
-      'Initializing react debugger for ' +
-      ANSI.reset +
-      ANSI.cyan +
-      frameworkLabel +
-      ANSI.reset +
-      ANSI.bold +
-      ' with ' +
-      ANSI.reset +
-      ANSI.cyan +
-      clientToShow +
-      ANSI.reset +
-      '\n'
-  );
-
-  if (added.length > 0) {
-    console.log(ANSI.bold + 'added:' + ANSI.reset);
-    for (const it of added) console.log(ANSI.green + '- ' + ANSI.reset + it);
-    console.log('');
-  }
-
-  printClientInstructions(
-    clientToShow === 'your editor' ? 'generic' : clientToShow
-  );
-
-  console.log('');
-  console.log(
-    ANSI.dim + 'Need help? `npx @react-debugger/core help`' + ANSI.reset
-  );
+  return { added: !hadServer, updated: false };
 }
 
-/* -------------------------- helpers -------------------------- */
+function readJsonSafe(filePath: string): any {
+  try {
+    if (!existsSync(filePath)) return {};
+    const raw = readFileSync(filePath, 'utf8');
+    if (!raw.trim()) return {};
+    return JSON.parse(raw);
+  } catch {
+    // Corrupt? start fresh rather than crash.
+    return {};
+  }
+}
 
-function cursorRuleMarkdown(): string {
+async function runHelpInteractive() {
+  if (!process.stdin.isTTY) {
+    console.log(
+      `${ANSI.gray}Help is interactive. Run this command in a terminal: ${ANSI.underline}npx @react-debugger/core help${ANSI.reset}`
+    );
+    return;
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  const opts = [
+    'MCP server problems',
+    'Problems with mcp.json',
+    'Cursor rules / diagnostics',
+    'Exit',
+  ];
+
+  console.log(`${ANSI.bold}${ANSI.cyan}React Debugger — Help${ANSI.reset}`);
+  console.log(
+    `${ANSI.gray}Choose a topic to get troubleshooting steps:${ANSI.reset}\n`
+  );
+  opts.forEach((o, i) =>
+    console.log(
+      `  ${ANSI.cyan}${i + 1}${ANSI.reset}) ${ANSI.gray}${o}${ANSI.reset}`
+    )
+  );
+
+  const q = (prompt: string) =>
+    new Promise<string>((res) => rl.question(prompt, res));
+  const ans = await q(`\n${ANSI.bold}Select (1–4): ${ANSI.reset}`);
+  const idx = Number(ans.trim()) - 1;
+
+  console.log('');
+  switch (idx) {
+    case 0:
+      console.log(`${ANSI.bold}MCP server problems${ANSI.reset}`);
+      console.log(
+        `• (this is the issue 90% of the time) Is port ${ANSI.green}5679${ANSI.reset} in use? Free it:`
+      );
+      console.log(`    ${ANSI.dim}lsof -ti:5679 | xargs kill -9${ANSI.reset}`);
+      console.log('• Start the server with an explicit port if needed:');
+      console.log('    npx @react-debugger/core mcp --port 5680');
+      console.log(
+        '• Check logs in the terminal where the MCP server was started for errors.'
+      );
+      console.log('For claude code:');
+      console.log(
+        '• claude mcp list' + '→ is react-debugger listed and enabled?'
+      );
+      break;
+    case 1:
+      console.log(`${ANSI.bold}Problems with mcp.json${ANSI.reset}`);
+      console.log(
+        '• Ensure there is an `mcp.json` in your project or .cursor/mcp.json.'
+      );
+      console.log(
+        '• Validate JSON formatting — a trailing comma will break the file.'
+      );
+      console.log(
+        '• If missing, run `npx @react-debugger/core init` to seed it.'
+      );
+      break;
+    case 2:
+      console.log(`${ANSI.bold}Cursor rules / diagnostics${ANSI.reset}`);
+      console.log(
+        '• Ensure `.cursor/rules/react-debugger.mdc` exists (init creates it).'
+      );
+      console.log(
+        '• Cursor may require you to enable MCP tools in Settings → MCP & Integrations → MCP Tools.'
+      );
+      console.log(
+        "• If rules aren't applied, try restarting Cursor or reload the window (Cmd/Ctrl+Shift+P → Reload Window)."
+      );
+      break;
+    default:
+      console.log('Exiting help.');
+      break;
+  }
+
+  rl.close();
+}
+
+function cursorRuleMarkdown() {
   return `
 ---
 alwaysApply: true
@@ -253,24 +349,199 @@ When you are helping debug React bugs, follow this workflow:
 3. Only **after** stating your diagnosis, backed by evidence, may you propose code changes.
 `;
 }
+const initVSCode = () => {
+  console.log('Initializing VSCode...');
+  const cwd = process.cwd();
+  const serverId = 'react-debugger';
+  const mcpTemplateFile = existsSync(TEMPLATE_PATH)
+    ? JSON.parse(readFileSync(TEMPLATE_PATH, 'utf8'))
+    : {};
+  const serverConfig = mcpTemplateFile?.mcpServers?.[serverId];
 
-function writeIfAbsent(filePath: string, content: string) {
-  if (!existsSync(filePath)) {
-    writeFileSync(filePath, content, 'utf8');
+  const defaultPath = path.join(cwd, '.vscode', 'mcp.json');
+  const res = ensureMcpServer(
+    defaultPath,
+    serverId,
+    serverConfig,
+    mcpTemplateFile
+  );
+  if (res.added)
+    console.log(`  ✔ Created ${rel(defaultPath)} and added ${serverId}`);
+  else
+    console.log(
+      `  ${ANSI.gray}  • Already configured: ${rel(defaultPath)}${ANSI.reset}`
+    );
+
+  console.log('');
+  console.log(`${ANSI.green}✔ Setup complete!${ANSI.reset}` + '\n');
+  console.log(ANSI.bold + 'Next steps' + ANSI.reset);
+  console.log('  • Enable the server in the MCP extension:');
+  console.log(
+    ANSI.dim +
+      '    Open the Command Palette → Manage MCP Servers. Add or enable `react-debugger`.' +
+      ANSI.reset
+  );
+  console.log('');
+  console.log(
+    `${ANSI.gray}Need help? ${ANSI.underline}npx @react-debugger/core help${ANSI.reset}`
+  );
+};
+const initClaudeCode = async () => {
+  console.log('Initializing Claude code...\n');
+  const cwd = process.cwd();
+  const sid = 'react-debugger';
+  const template = existsSync(TEMPLATE_PATH)
+    ? JSON.parse(readFileSync(TEMPLATE_PATH, 'utf8'))
+    : { mcpServers: {} };
+  const serverCfg = template?.mcpServers?.[sid];
+  if (!serverCfg) {
+    console.log(
+      `${ANSI.yellow}⚠${ANSI.reset} ${ANSI.gray}Template is missing "${sid}" definition${ANSI.reset}`
+    );
+    return;
+  }
+
+  // Attempt remote registration via Claude CLI if the user has global Cursor and the claude CLI
+  const tryRemoteRegister = async (): Promise<
+    { remote: true; cmdOutput: string; reachable: boolean } | { remote: false }
+  > => {
+    try {
+      const child = require('child_process');
+
+      const hasClaudeCli = (() => {
+        try {
+          const out = child
+            .execSync('which claude', { stdio: ['ignore', 'pipe', 'ignore'] })
+            .toString()
+            .trim();
+          return !!out;
+        } catch {
+          return false;
+        }
+      })();
+
+      if (!hasClaudeCli)
+        return {
+          remote: false,
+        };
+
+      console.log(
+        `${ANSI.cyan}Registering MCP server with Claude via CLI...${ANSI.reset}`
+      );
+      const cmd = `claude mcp add ${sid} npx @react-debugger/core mcp`;
+      let out = '';
+      try {
+        out = child
+          .execSync(cmd, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+          .toString();
+      } catch (err: any) {
+        console.log(
+          `  ${ANSI.gray}  • MCP server already registered${ANSI.reset}`
+        );
+      }
+      return { remote: true, cmdOutput: out, reachable: true };
+    } catch (err) {
+      // any unexpected error - don't block the fallback
+
+      return { remote: false };
+    }
+  };
+
+  const remoteRes = await tryRemoteRegister();
+  if (remoteRes.remote) {
+    // remote registration attempted; still ensure README/CLAUDE.md exists locally
+    const claudePath = path.join(cwd, 'CLAUDE.md');
+    const claudeSnippet = `# React Debugger Workflow
+
+IMPORTANT: Enforce diagnostic-first workflow using React Debugger MCP.
+
+1. Diagnose before editing.
+2. Do not propose or change code before using the React Debugger tools:
+   - \`tools/call subscribe\` → capture \`fid\`
+   - \`tools/call nextEvents\` → wait for snapshot/commit
+   - \`tools/call getProps\` or \`tools/call getHooksState\` using that \`fid\`
+3. Only after stating your diagnosis, backed by evidence, may you propose code changes.
+`;
+
+    if (!existsSync(claudePath)) {
+      writeFileSync(claudePath, claudeSnippet, 'utf8');
+      console.log(`  ✔ Created ${rel(claudePath)}`);
+    } else {
+      const raw = readFileSync(claudePath, 'utf8');
+      if (!raw.includes('React Debugger Workflow')) {
+        writeFileSync(claudePath, raw + '\n\n' + claudeSnippet, 'utf8');
+        console.log(`  ✔ Appended workflow to ${rel(claudePath)}`);
+      } else {
+        console.log(
+          `  ${ANSI.gray}  • Already exists: ${rel(claudePath)}${ANSI.reset}`
+        );
+      }
+    }
+
+    console.log(ANSI.green + '\n✔ Setup complete!' + ANSI.reset + '\n');
+
+    console.log(ANSI.bold + 'Next steps' + ANSI.reset);
+    console.log(`  1. run claude to interact with the mcp server!\n`);
+
+    console.log(
+      `${ANSI.gray}Need help? ${ANSI.underline}npx @react-debugger/core help${ANSI.reset}`
+    );
+
+    return;
+  }
+  // CLI not found or failed – give clear next steps, but don't fail init
+  console.log(
+    `${ANSI.yellow}⚠${ANSI.reset} Claude CLI not detected or registration failed.`
+  );
+  console.log(`${ANSI.gray}  • CLI error: Claude not installed${ANSI.reset}`);
+
+  // Don’t auto-install; provide copy-paste command(s) instead.
+  console.log('\nInstall Claude Code CLI and then register the MCP server:');
+  console.log(
+    `  ${ANSI.underline}claude mcp add ${sid} "npx @react-debugger/core mcp"${ANSI.reset}`
+  );
+  console.log(
+    `\n${ANSI.dim}Tip: if you prefer, pass ${ANSI.bold}--client=claude${ANSI.reset}${ANSI.dim} to skip client selection next time.${ANSI.reset}\n`
+  );
+
+  // Exit happily; local project is still initialized.
+};
+
+const handleHelp = () => {
+  // delegate to interactive help used in the original implementation
+  runHelpInteractive().catch(() => {
+    console.log(
+      `${ANSI.gray}Help is interactive. Run this command in a terminal: ${ANSI.underline}npx @react-debugger/core help${ANSI.reset}`
+    );
+  });
+};
+
+const handleMcp = () => {
+  console.log('Handling mcp...');
+};
+
+async function main() {
+  switch (subcommand) {
+    case 'init':
+      await handleInit();
+      break;
+    case 'help':
+      handleHelp();
+      break;
+    case 'mcp':
+      handleMcp();
+      break;
+    default:
+      console.log(`Unknown subcommand: ${subcommand}`);
   }
 }
 
-const BRIDGE_SRC =
-  '//unpkg.com/@react-debugger/core/dist/react-bridge-client.js';
-const BRIDGE_TAG = `<script src="${BRIDGE_SRC}"></script>`;
+main().catch((err) => {
+  console.error('Error starting React Debugger:', err);
+  process.exit(1);
+});
 
-type InjectResult = {
-  detected: string | null;
-  filePath: string | null;
-  injected: boolean;
-  reason?: string;
-};
-
+////////////////// Framework and bridge injection //////////////////
 function detectAndInjectBridge(cwd: string): InjectResult {
   const candidates: Array<{
     framework: string;
@@ -486,333 +757,12 @@ function injectIntoTsxHead(filePath: string): {
   }
 }
 
-function mkdirp(dirPath: string) {
-  if (!existsSync(dirPath)) {
-    mkdirSync(dirPath, { recursive: true });
-  }
-}
-
 function rel(p: string) {
   return path.relative(process.cwd(), p) || '.';
 }
 
-async function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const tester = net
-      .createServer()
-      .once('error', () => resolve(false))
-      .once('listening', () => {
-        tester.close(() => resolve(true));
-      })
-      .listen(port, '127.0.0.1');
-  });
-}
-
-/**
- * Heuristic detection of MCP client from project files.
- * Returns one of: 'cursor', 'vscode', 'claude', or null.
- */
-function detectClientFromProject(cwd: string): string | null {
-  try {
-    // Cursor often has a .cursor directory
-    if (existsSync(path.join(cwd, '.cursor'))) return 'cursor';
-
-    // VS Code projects often have a .vscode directory or package.json with mcp extension devDependency
-    if (existsSync(path.join(cwd, '.vscode'))) return 'vscode';
-
-    const pkgPath = path.join(cwd, 'package.json');
-    if (existsSync(pkgPath)) {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8') || '{}');
-      const deps = Object.assign({}, pkg.dependencies, pkg.devDependencies);
-      if (deps && typeof deps === 'object') {
-        if (deps['@cursor/dev'] || deps['@cursor/cli']) return 'cursor';
-        if (deps['@microsoft/vscode-mcp'] || deps['vscode']) return 'vscode';
-        if (deps['claude-desktop'] || deps['anthropic']) return 'claude';
-      }
-    }
-  } catch {
-    // ignore detection errors
+function mkdirp(dirPath: string) {
+  if (!existsSync(dirPath)) {
+    mkdirSync(dirPath, { recursive: true });
   }
-  return null;
-}
-
-function printClientInstructions(client: string) {
-  const lines: string[] = [];
-  switch (client) {
-    case 'cursor':
-      lines.push(
-        ANSI.green +
-          '• ' +
-          ANSI.reset +
-          ANSI.bold +
-          'Cursor detected.' +
-          ANSI.reset +
-          ' After enabling the MCP server you should see a popup:'
-      );
-      lines.push(
-        ANSI.dim +
-          '    `New MCP server detected: react-debugger` → click "Enable".' +
-          ANSI.reset
-      );
-      lines.push(
-        ANSI.dim +
-          '  If the popup did not appear, go to Settings → MCP & Integrations → MCP Tools and toggle on `react-debugger`.' +
-          ANSI.reset
-      );
-      break;
-    case 'vscode':
-      lines.push(
-        ANSI.green +
-          '• ' +
-          ANSI.reset +
-          ANSI.bold +
-          'VS Code detected.' +
-          ANSI.reset +
-          ' Enable the server in the MCP extension:'
-      );
-      lines.push(
-        ANSI.dim +
-          '    Open the Command Palette → Manage MCP Servers. Add or enable `react-debugger`.' +
-          ANSI.reset
-      );
-      break;
-    case 'claude':
-      lines.push(
-        ANSI.green +
-          '• ' +
-          ANSI.reset +
-          ANSI.bold +
-          'Claude Desktop detected.' +
-          ANSI.reset +
-          ' You should see a popup:'
-      );
-      lines.push(
-        ANSI.dim +
-          '    `New MCP server detected: react-debugger` → click "Enable".' +
-          ANSI.reset
-      );
-      lines.push(
-        ANSI.dim +
-          '  If it does not appear, go to Settings → MCP Servers and toggle on `react-debugger`.' +
-          ANSI.reset
-      );
-      break;
-    default:
-      lines.push(
-        ANSI.green +
-          '• ' +
-          ANSI.reset +
-          ANSI.bold +
-          'MCP server created.' +
-          ANSI.reset +
-          ' To enable it in your environment, refer to the README for client-specific steps.'
-      );
-      lines.push(
-        ANSI.dim +
-          '  For a quick local run you can start the MCP server with:' +
-          ANSI.reset
-      );
-      lines.push(ANSI.dim + '    npx @react-debugger/core mcp' + ANSI.reset);
-      break;
-  }
-
-  for (const l of lines) console.log(l);
-}
-
-async function runHelpInteractive() {
-  if (!process.stdin.isTTY) {
-    console.log(
-      'Help is interactive. Run this command in a terminal: npx @react-debugger/core help'
-    );
-    return;
-  }
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  const opts = [
-    'MCP server problems',
-    'Problems with mcp.json',
-    'Cursor rules / diagnostics',
-    'Exit',
-  ];
-
-  console.log(`${ANSI.bold}${ANSI.cyan}React Debugger — Help${ANSI.reset}`);
-  console.log('Choose a topic to get troubleshooting steps:\n');
-  opts.forEach((o, i) =>
-    console.log(`  ${ANSI.yellow}${i + 1}${ANSI.reset}) ${o}`)
-  );
-
-  const q = (prompt: string) =>
-    new Promise<string>((res) => rl.question(prompt, res));
-  const ans = await q('\nSelect (1-4): ');
-  const idx = Number(ans.trim()) - 1;
-
-  console.log('');
-  switch (idx) {
-    case 0:
-      console.log(`${ANSI.bold}MCP server problems${ANSI.reset}`);
-      console.log(`• Is port ${ANSI.green}5679${ANSI.reset} in use? Free it:`);
-      console.log(`    ${ANSI.dim}lsof -ti:5679 | xargs kill -9${ANSI.reset}`);
-      console.log('• Start the server with an explicit port if needed:');
-      console.log('    npx @react-debugger/core mcp --port 5680');
-      console.log(
-        '• Check logs in the terminal where the MCP server was started for errors.'
-      );
-      break;
-    case 1:
-      console.log(`${ANSI.bold}Problems with mcp.json${ANSI.reset}`);
-      console.log(
-        '• Ensure there is an `mcp.json` in your project or .cursor/mcp.json.'
-      );
-      console.log(
-        '• Validate JSON formatting — a trailing comma will break the file.'
-      );
-      console.log(
-        '• If missing, run `npx @react-debugger/core init` to seed it.'
-      );
-      break;
-    case 2:
-      console.log(`${ANSI.bold}Cursor rules / diagnostics${ANSI.reset}`);
-      console.log(
-        '• Ensure `.cursor/rules/react-debugger.mdc` exists (init creates it).'
-      );
-      console.log(
-        '• Cursor may require you to enable MCP tools in Settings → MCP & Integrations → MCP Tools.'
-      );
-      console.log(
-        "• If rules aren't applied, try restarting Cursor or reload the window (Cmd/Ctrl+Shift+P → Reload Window)."
-      );
-      break;
-    default:
-      console.log('Exiting help.');
-      break;
-  }
-
-  rl.close();
-}
-
-// Try different Chrome variants
-async function findChrome(): Promise<string> {
-  const chromeCommands = ['google-chrome', 'chromium', 'chrome'];
-
-  const chromePaths = [
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  ];
-
-  // First try commands in PATH
-  for (const cmd of chromeCommands) {
-    try {
-      const { stdout } = await execAsync(`which ${cmd}`);
-      if (stdout.trim()) {
-        return stdout.trim();
-      }
-    } catch {
-      // Command not found, try next
-    }
-  }
-
-  // Then try full paths
-  for (const p of chromePaths) {
-    try {
-      if (existsSync(p)) {
-        return p;
-      }
-    } catch {
-      // Path not found, try next
-    }
-  }
-
-  throw new Error('Chrome not found');
-}
-
-async function launchChrome(url: string) {
-  const chromePath = await findChrome();
-
-  // Launch Chrome with debugging flags
-  spawn(
-    chromePath,
-    ['--remote-debugging-port=9222', '--user-data-dir=/tmp/chrome-debug', url],
-    {
-      stdio: 'inherit',
-      detached: true,
-    }
-  );
-}
-
-main().catch((err) => {
-  console.error('Error starting React Debugger:', err);
-  process.exit(1);
-});
-
-// --- MCP config helpers ------------------------------------------------------
-
-function readJsonSafe(filePath: string): any {
-  try {
-    if (!existsSync(filePath)) return {};
-    const raw = readFileSync(filePath, 'utf8');
-    if (!raw.trim()) return {};
-    return JSON.parse(raw);
-  } catch {
-    // Corrupt? start fresh rather than crash.
-    return {};
-  }
-}
-
-function writeJsonStable(filePath: string, obj: any) {
-  try {
-    mkdirp(path.dirname(filePath));
-    writeFileSync(filePath, JSON.stringify(obj, null, 2) + '\n', 'utf8');
-  } catch (err) {
-    console.error(`Failed to write MCP config to ${filePath}:`, err);
-    throw err;
-  }
-}
-
-/**
- * Ensures an MCP server entry exists in `filePath` without clobbering other servers.
- * - Creates file from template if missing.
- * - Adds the `serverId` if absent.
- * - If present, leaves existing config untouched (no surprise overwrites).
- */
-function ensureMcpServer(
-  filePath: string,
-  serverId: string,
-  serverConfig: Record<string, any>,
-  templateObj?: Record<string, any>
-) {
-  const hadFile = existsSync(filePath);
-
-  // If no file, start from the template wholesale; otherwise read existing.
-  let base: any = hadFile
-    ? readJsonSafe(filePath)
-    : templateObj && typeof templateObj === 'object'
-    ? JSON.parse(JSON.stringify(templateObj))
-    : {};
-  if (!base || typeof base !== 'object') base = {};
-
-  // If we *do* have an existing file, merge in any missing top-level keys from the template (non-destructive).
-  if (hadFile && templateObj && typeof templateObj === 'object') {
-    for (const [k, v] of Object.entries(templateObj)) {
-      if (k === 'mcpServers') continue; // handled below
-      if (!(k in base)) base[k] = v;
-    }
-  }
-
-  if (!base.mcpServers || typeof base.mcpServers !== 'object')
-    base.mcpServers = {};
-
-  const hadServer = !!base.mcpServers[serverId];
-  if (!hadServer) {
-    base.mcpServers[serverId] = serverConfig;
-  }
-
-  // Write if the file didn't exist (seed from template) or if we added the server.
-  if (!hadFile || !hadServer) {
-    writeJsonStable(filePath, base);
-  }
-
-  return { added: !hadServer, updated: false };
 }
