@@ -127,6 +127,10 @@ class MCPDebuggerAgent {
   private renderCountMap = new WeakMap<FiberNode, number>();
   private ownerPathCache = new WeakMap<FiberNode, string>();
 
+  private subIdToFids = new Map<string, Set<string>>();
+  private fidToFiber = new Map<string, WeakRef<FiberNode>>();
+  private fiberToFid = new WeakMap<FiberNode, string>();
+
   private ringBuffer: {
     commitId: number;
     perFiber: Map<
@@ -183,7 +187,9 @@ class MCPDebuggerAgent {
   }
 
   private setupReactDevToolsHook() {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') {
+      return;
+    }
 
     const attach = (hook: any) => {
       const original = hook.onCommitFiberRoot?.bind(hook);
@@ -202,7 +208,9 @@ class MCPDebuggerAgent {
       return false;
     };
 
-    if (tryAttach()) return;
+    if (tryAttach()) {
+      return;
+    }
 
     // Wait for DevTools/renderer inject; retry a few times
     let tries = 0;
@@ -230,7 +238,9 @@ class MCPDebuggerAgent {
       // Track unique roots for multi-root apps
       const curRoot = root?.current as FiberNode | null;
       if (curRoot) {
-        if (!this.roots.includes(curRoot)) this.roots.push(curRoot);
+        if (!this.roots.includes(curRoot)) {
+          this.roots.push(curRoot);
+        }
       }
 
       // Build changes by traversing tree
@@ -241,7 +251,16 @@ class MCPDebuggerAgent {
 
       this.forEachFiberInTree(root.current, (fiber) => {
         fiberCount++;
-        const fid = this.fidFor(fiber);
+        const alt: any = (fiber as any).alternate;
+        const fid =
+          this.fiberToFid.get(fiber) ?? (alt && this.fiberToFid.get(alt));
+
+        if (!fid) {
+          return;
+        }
+        // update map to reflect the current fiber
+        this.fidToFiber.set(fid, new WeakRef(fiber));
+
         seenFids.add(fid);
         const prev = this.lastSnapshot.get(fid) || {};
 
@@ -255,9 +274,8 @@ class MCPDebuggerAgent {
         const propDiff = this.diffObject(prev.props, nowProps);
         const stateDiff = this.diffObject(prev.state, nowStatePreview);
         const contextDiff = this.diffObject(prev.context, nowCtx);
-        const ownerFidNow = fiber.return
-          ? this.fidFor(fiber.return)
-          : undefined;
+        const ownerFidNow = this.parentFidOf(fiber);
+
         const pathNow = this.ownerPath(fiber);
         const why = this.whyReasons(
           propDiff,
@@ -265,7 +283,7 @@ class MCPDebuggerAgent {
           contextDiff,
           fiber,
           (prev as any).ownerFid,
-          ownerFidNow
+          ownerFidNow ?? undefined
         );
 
         if (why.length) {
@@ -276,9 +294,9 @@ class MCPDebuggerAgent {
             fid,
             type,
             displayName: this.displayNameOf(fiber),
-            ownerFid,
+            ownerFid: ownerFid ?? undefined,
             key: (fiber as any).key ?? undefined,
-            path: pathNow,
+            // path: pathNow,
             why,
             propDiff,
             stateDiff,
@@ -294,7 +312,7 @@ class MCPDebuggerAgent {
           state: nowStatePreview,
           context: nowCtx,
           displayName: this.displayNameOf(fiber),
-          ownerFid: ownerFidNow,
+          ownerFid: ownerFidNow ?? undefined,
         });
       });
 
@@ -395,26 +413,11 @@ class MCPDebuggerAgent {
             }
           }
         }
-      } else {
-        LOG_WARN(
-          `[onCommitFiberRootPatch] id=${this.instanceId} ⚠️ No channels manager available - cannot send data`
-        );
       }
-
-      LOG(
-        `[onCommitFiberRootPatch] id=${this.instanceId} Completed commit ${
-          env.commitId
-        } in ${env.commitMs?.toFixed(2)}ms`
-      );
     } catch (e) {
-      LOG_ERROR(
-        `[onCommitFiberRootPatch] id=${this.instanceId} fatal error inside commit handler:`,
-        e
-      );
+      // Silent error handling
     } finally {
-      LOG(
-        `[onCommitFiberRootPatch] id=${this.instanceId} end (may still proceed to channel sends)`
-      );
+      // Silent cleanup
     }
   }
 
@@ -441,7 +444,7 @@ class MCPDebuggerAgent {
             try {
               this.ws!.send(JSON.stringify(msg));
             } catch (error) {
-              LOG_ERROR('[MCPAgent] Failed to send buffered message:', error);
+              // Silent error handling
             }
           }
         };
@@ -451,7 +454,7 @@ class MCPDebuggerAgent {
             const message: MCPAgentMessage = JSON.parse(event.data);
             this.handleMessage(message);
           } catch (error) {
-            LOG_ERROR('[MCP Agent] Failed to parse message:', error);
+            // Silent error handling
           }
         };
 
@@ -469,7 +472,7 @@ class MCPDebuggerAgent {
         };
 
         this.ws.onerror = (error) => {
-          LOG_ERROR('[MCP Agent] WebSocket error:', error);
+          // Silent error handling
         };
       } catch (error) {
         const base = Math.min(
@@ -496,12 +499,14 @@ class MCPDebuggerAgent {
           budgets: message.budgets,
         };
         this.subscriptions.set(sub.id, sub);
+
         // send initial snapshot
         const snapshotPayload = this.buildSnapshot(
           sub.id,
           sub.selector,
           sub.fields
         );
+
         this.channels?.send('snapshot', { ...snapshotPayload });
 
         // seed ring buffer from live tree if empty
@@ -509,8 +514,9 @@ class MCPDebuggerAgent {
           this.seedCachesFromLiveTree();
         }
 
-        // also emit a control status so the server can fail fast if selector matched nothing
+        // Log what exists
         const matchCount = (snapshotPayload as any)?.payload?.rows?.length ?? 0;
+
         this.channels?.send('control', {
           type: matchCount > 0 ? 'SUBSCRIBE_OK' : 'SUBSCRIBE_EMPTY',
           subscriptionId: sub.id,
@@ -636,13 +642,39 @@ class MCPDebuggerAgent {
     root: FiberNode | null,
     visit: (fiber: FiberNode) => void
   ) {
+    if (!root) {
+      return;
+    }
+
     const stack: (FiberNode | null)[] = [root];
+    let depth = 0;
+    let maxDepth = 0;
+    let nodeCount = 0;
+
     while (stack.length) {
       const f = stack.pop();
       if (!f) continue;
-      visit(f);
-      if ((f as any).child) stack.push((f as any).child);
-      if ((f as any).sibling) stack.push((f as any).sibling);
+
+      nodeCount++;
+      depth = Math.max(0, depth - 1); // Approximate depth
+      maxDepth = Math.max(maxDepth, depth);
+
+      try {
+        visit(f);
+      } catch (err) {
+        // keep going even if a single node's inspection explodes
+        // (bad getters, proxies, userland objects, etc.)
+        console.error('visit error on fiber', { err });
+      }
+
+      // Add children to stack
+      if ((f as any).child) {
+        stack.push((f as any).child);
+        depth++;
+      }
+      if ((f as any).sibling) {
+        stack.push((f as any).sibling);
+      }
     }
   }
 
@@ -758,24 +790,90 @@ class MCPDebuggerAgent {
     return reasons;
   }
 
-  private fidFor(fiber: FiberNode): string {
-    const path = this.ownerPath(fiber);
-    const key = (fiber as any).key ?? '';
-    const src = this.sourceOf(fiber);
-    const sig = `${path}|k:${key}|${src?.file ?? ''}:${src?.line ?? ''}:${
-      src?.col ?? ''
-    }`;
+  private fidOf(fiber: FiberNode): string | null {
+    const fid = this.fiberToFid.get(fiber);
+    if (fid) return fid;
+    const alt = (fiber as any).alternate as FiberNode | null | undefined;
+    return alt ? this.fiberToFid.get(alt) ?? null : null;
+  }
 
-    return this.hash(sig);
+  // Read-only: same for parent
+  private parentFidOf(fiber: FiberNode): string | null {
+    const ret = (fiber as any).return as FiberNode | null | undefined;
+    if (!ret) return null;
+    const fid = this.fiberToFid.get(ret);
+    if (fid) return fid;
+    const alt = (ret as any).alternate as FiberNode | null | undefined;
+    return alt ? this.fiberToFid.get(alt) ?? null : null;
+  }
+
+  private mintFid(): string {
+    return 'crypto' in globalThis && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2); // fallback
+  }
+
+  private getOrCreateFid(fiber: FiberNode): string {
+    const existing = this.fiberToFid.get(fiber);
+    const alt = fiber.alternate;
+
+    if (existing) {
+      this.fidToFiber.set(existing, new WeakRef(fiber));
+      if (alt && !this.fiberToFid.has(alt)) this.fiberToFid.set(alt, existing);
+      return existing;
+    }
+
+    const altFid = alt ? this.fiberToFid.get(alt) : null;
+    if (altFid) {
+      this.fiberToFid.set(fiber, altFid);
+      this.fidToFiber.set(altFid, new WeakRef(fiber));
+      return altFid;
+    }
+
+    const fid = this.mintFid();
+    this.fiberToFid.set(fiber, fid);
+    if (alt) this.fiberToFid.set(alt, fid);
+    this.fidToFiber.set(fid, new WeakRef(fiber));
+    return fid;
   }
 
   private displayNameOf(fiber: FiberNode): string {
-    if ((fiber as any).type) {
-      const t: any = (fiber as any).type;
-      if (typeof t === 'function')
-        return t.displayName || t.name || 'Anonymous';
-      if (typeof t === 'string') return t;
+    const t = (fiber as any).type;
+
+    if (typeof t === 'string') return t; // host
+
+    if (typeof t === 'function') {
+      return (
+        t.displayName ??
+        t.name ??
+        t.elementType.type ??
+        t.elementType.name ??
+        'Anonymous'
+      );
     }
+
+    const REACT_MEMO = Symbol.for('react.memo');
+    const REACT_FORWARD_REF = Symbol.for('react.forward_ref');
+
+    if (t && t.$$typeof === REACT_MEMO) {
+      const inner = t.type;
+      return (
+        t.displayName ?? inner?.displayName ?? inner?.name ?? 'Memo(Anonymous)'
+      );
+    }
+    if (t && t.$$typeof === REACT_FORWARD_REF) {
+      const render = t.render;
+      return (
+        t.displayName ??
+        render?.displayName ??
+        render?.name ??
+        'ForwardRef(Anonymous)'
+      );
+    }
+
+    // Context/Providers/Suspense etc.
+    if (t && typeof t === 'object' && t.displayName) return t.displayName;
+
     return 'Unknown';
   }
 
@@ -805,12 +903,6 @@ class MCPDebuggerAgent {
       };
     }
     return null;
-  }
-
-  private hash(input: string): string {
-    let h = 5381;
-    for (let i = 0; i < input.length; i++) h = (h * 33) ^ input.charCodeAt(i);
-    return (h >>> 0).toString(36);
   }
 
   private filterChangesBySelector(
@@ -909,9 +1001,14 @@ class MCPDebuggerAgent {
     // Traverse current tree
     const root = (window as any).FiberDataBridge
       ?.currentRootFiber as FiberNode | null;
+
+    const seenFids = new Set<string>();
+
     const byDisplayName: Record<string, string[]> = {};
     const byFile: Record<string, string[]> = {};
     const pushRow = (fid: string, fiber: FiberNode) => {
+      if (seenFids.has(fid)) return; // prevent duplicate targets
+      seenFids.add(fid);
       const displayName = this.displayNameOf(fiber);
       const path = this.ownerPath(fiber);
       const key = (fiber as any).key ?? undefined;
@@ -943,7 +1040,7 @@ class MCPDebuggerAgent {
       rows.push({
         fid,
         displayName,
-        path,
+        // path,
         key,
         propsPreview,
         hooksPreview,
@@ -959,39 +1056,68 @@ class MCPDebuggerAgent {
     };
     const matchesSelector = (fiber: FiberNode): boolean => {
       if (!selector) return true;
+
+      // Skip HOST text/comment/portal; allow anything that isn't a host string
+      const t: any = (fiber as any).type;
+      const isHost = typeof t === 'string' || t == null; // tag 3 (root) has null
+      if (isHost) return false;
+
       const name = this.displayNameOf(fiber);
-      if (!this.matchStringOrRegex(selector.displayName as any, name))
+
+      if (
+        selector.displayName &&
+        !this.matchStringOrRegex(selector.displayName as any, name)
+      ) {
         return false;
-      if (selector.file) {
-        const f = this.sourceOf(fiber)?.file || '';
-        if (!this.matchStringOrRegex(selector.file as any, f)) return false;
       }
-      if (selector.pathContains) {
-        const p = this.ownerPath(fiber);
-        if (!p.includes(selector.pathContains)) return false;
-      }
-      if (selector.keyEquals) {
-        if (((fiber as any).key ?? undefined) !== selector.keyEquals)
-          return false;
-      }
-      if (selector.propsMatch) {
-        const propsPreviewAll = this.safePreview((fiber as any).memoizedProps);
-        for (const [k, v] of Object.entries(selector.propsMatch)) {
-          if ((propsPreviewAll as any)?.[k] !== v) return false;
-        }
+
+      if (selector.keyEquals && (fiber as any).key !== selector.keyEquals)
+        return false;
+
+      if (selector?.file) {
+        const src = this.sourceOf(fiber);
+        const file = src?.file || '';
+        if (!this.matchStringOrRegex(selector.file as any, file)) return false;
       }
       return true;
     };
     const rootsToWalk: (FiberNode | null)[] = this.roots.length
       ? [...this.roots]
       : [root];
+
+    let totalFibersProcessed = 0;
+
     for (const r of rootsToWalk) {
-      if (!r) continue;
+      if (!r) {
+        continue;
+      }
+
+      const perName = new Map<string, number>();
+      const nextFor = (name: string) => {
+        const n = (perName.get(name) ?? 0) + 1;
+        perName.set(name, n);
+        return n;
+      };
+
       this.forEachFiberInTree(r, (fiber) => {
-        const fid = this.fidFor(fiber);
-        if (matchesSelector(fiber)) pushRow(fid, fiber);
+        totalFibersProcessed++;
+
+        if (matchesSelector(fiber)) {
+          const fid = this.getOrCreateFid(fiber);
+
+          const displayName = this.displayNameOf(fiber);
+          const n = nextFor(displayName);
+
+          this.subIdToFids.set(
+            subscriptionId,
+            new Set([...(this.subIdToFids.get(subscriptionId) || []), fid])
+          );
+
+          pushRow(fid, fiber);
+        }
       });
     }
+
     return {
       subscriptionId,
       payload: { fromCommit, rows, indexes: { byDisplayName, byFile } },
@@ -1002,11 +1128,11 @@ class MCPDebuggerAgent {
     const fid = msg.fid!;
     const commitId = msg.commitId ?? this.commitId;
     const paths = msg.paths || [];
-    // find closest commit in ring
+
+    // pick a ring entry
     let entry = this.ringBuffer.find((e) => e.commitId === commitId);
     if (!entry) entry = this.ringBuffer[this.ringBuffer.length - 1];
     if (!entry || !entry.perFiber) {
-      // Not ready or evicted
       this.channels?.send('control', {
         channel: 'control',
         type: 'NOT_READY',
@@ -1016,21 +1142,46 @@ class MCPDebuggerAgent {
       });
       return;
     }
-    const per = entry?.perFiber.get(fid) || {};
-    const source = kind === 'props' ? per.props : per.hooks;
-    const out: Record<string, any> = {};
-    for (const p of paths) {
-      out[p] = this.getAtPath(source, p);
+
+    // pull from ring; if missing, fall back to lastSnapshot
+    const per = entry.perFiber.get(fid);
+    const snap = this.lastSnapshot.get(fid) || {};
+    const source =
+      kind === 'props'
+        ? per?.props ?? (snap as any).props
+        : per?.hooks ?? (snap as any).state;
+
+    // nothing known for this fid
+    if (source == null) {
+      this.channels?.send('control', {
+        channel: 'control',
+        type: 'NOT_READY',
+        requestId: msg.requestId,
+        hint: 'noSource',
+        latestCommit: this.commitId,
+      });
+      return;
     }
+
+    let data: any;
+    if (paths.length === 0) {
+      // return entire object on empty paths
+      data = source;
+    } else {
+      data = {};
+      for (const p of paths) data[p] = this.getAtPath(source, String(p));
+    }
+
     const resp = {
       subscriptionId: undefined,
       type: 'DEREF_RESPONSE',
       requestId: msg.requestId,
       kind,
       fid,
-      commitId,
-      data: out,
+      commitId: entry.commitId,
+      data,
     };
+
     if (this.channels) this.channels.send('control', { payload: resp });
     else if (this.isConnected && this.ws)
       this.ws.send(JSON.stringify({ channel: 'control', payload: resp }));
@@ -1088,18 +1239,19 @@ class MCPDebuggerAgent {
     for (const r of rootsToWalk) {
       if (!r) continue;
       this.forEachFiberInTree(r, (fiber) => {
-        const fid = this.fidFor(fiber);
+        const fid = this.fidOf(fiber);
+        if (!fid) return;
         const props = this.safePreview((fiber as any).memoizedProps);
         const hooks = this.previewHooksState((fiber as any).memoizedState);
         const ctx = this.previewContext(fiber);
-        const ownerFid = fiber.return ? this.fidFor(fiber.return) : undefined;
+        const ownerFid = this.parentFidOf(fiber);
         const displayName = this.displayNameOf(fiber);
         this.lastSnapshot.set(fid, {
           props,
           state: Object.keys(hooks).length ? hooks : undefined,
           context: ctx,
           displayName,
-          ownerFid,
+          ownerFid: ownerFid ?? undefined,
         });
         perFiber.set(fid, {
           props,
@@ -1107,7 +1259,7 @@ class MCPDebuggerAgent {
           hooks,
           context: ctx,
           displayName,
-          ownerFid,
+          ownerFid: ownerFid ?? undefined,
         });
       });
     }
@@ -1285,36 +1437,22 @@ class ChannelManager {
         };
         this.pendingCommit = merge(this.pendingCommit, payload);
         if (!this.coalesceTimer) {
-          LOG(
-            `[ChannelManager.send] ⏱️ Starting coalesce timer for channel '${ch}'`
-          );
           this.coalesceTimer = setTimeout(() => {
             try {
               const s = JSON.stringify({ channel: ch, ...this.pendingCommit });
-              LOG(
-                `[ChannelManager.send] 📤 Sending coalesced message for channel '${ch}' (${s.length} bytes)`
-              );
               this.ws.send(s);
               b.bytes += s.length;
               b.msgs += 1;
             } catch (error) {
-              LOG_ERROR(
-                `[ChannelManager.send] ❌ Failed to send coalesced message for channel '${ch}':`,
-                error
-              );
+              // Silent error handling
             }
             this.pendingCommit = null;
             this.coalesceTimer = null;
           }, 50);
-        } else {
-          LOG(
-            `[ChannelManager.send] ⏱️ Coalesce timer already running for channel '${ch}'`
-          );
         }
         this.lastNoticeAt.set(ch, now);
         return;
       } else if (ch === 'findings') {
-        LOG(`[ChannelManager.send] 📝 Channel '${ch}' summarizing findings`);
         if (oncePerSec)
           this.control({
             kind: 'budgetNotice',
@@ -1331,14 +1469,8 @@ class ChannelManager {
             seen.add(k);
             return true;
           });
-          LOG(
-            `[ChannelManager.send] 📝 Channel '${ch}' summarized ${originalCount} findings down to ${payload.findings.length}`
-          );
         }
       } else {
-        LOG(
-          `[ChannelManager.send] ⏸️ Channel '${ch}' suspended due to rate limit`
-        );
         if (oncePerSec)
           this.control({
             kind: 'budgetNotice',
@@ -1351,23 +1483,10 @@ class ChannelManager {
     }
 
     try {
-      LOG(`
-        [ChannelManager.send] 📤 Sending message to channel '${ch}' (${str.length} bytes)`);
       this.ws.send(str);
       b.bytes += size;
       b.msgs += 1;
-      LOG(
-        `[ChannelManager.send] ✅ Successfully sent to channel '${ch}' - new bucket: ${
-          b.bytes
-        }/${b.budget.kbPerSec * 1024} bytes, ${b.msgs}/${
-          b.budget.msgPerSec
-        } msgs`
-      );
     } catch (error) {
-      LOG_ERROR(
-        `[ChannelManager.send] ❌ WebSocket send failed for channel '${ch}':`,
-        error
-      );
       throw error;
     }
   }
@@ -1386,13 +1505,6 @@ class ChannelManager {
       b.bytes = 0;
       b.msgs = 0;
       b.t = now;
-      if (prevBytes > 0 || prevMsgs > 0) {
-        LOG(
-          `[ChannelManager.refill] Bucket refilled after ${timeSinceLastRefill.toFixed(
-            0
-          )}ms - was: ${prevBytes} bytes, ${prevMsgs} msgs`
-        );
-      }
     }
   }
 

@@ -377,7 +377,7 @@ class ReactMcpServer {
                       properties: {
                         displayName: {
                           type: 'string',
-                          description: 'Exact or regex pattern (string form)',
+                          description: 'Exact component display name',
                         },
                         file: {
                           type: 'string',

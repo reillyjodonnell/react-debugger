@@ -37,7 +37,7 @@ npx @react-debugger/core mcp
 
 should point to local http server!
 
-<script src="//localhost:8080/dist/react-bridge-client.js"></script>
+<script src="//localhost:8080/react-bridge-client.js"></script>
 
 Optional: preview the MCP server (useful when testing server behavior):
 
